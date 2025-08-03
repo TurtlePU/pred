@@ -28,10 +28,17 @@ executable pred
     build-depends:
         base ^>=4.18,
         dear-imgui,
+        gl,
+        managed,
+        sdl2,
+        text,
     default-language: GHC2021
-    other-extensions:
+    default-extensions:
+        BlockArguments,
         ImportQualifiedPost,
+        LambdaCase,
         NoStarIsType,
+        OverloadedStrings,
     ghc-options:      -Wall
     if flag(dev)
         ghc-options:  -Werror
