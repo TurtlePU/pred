@@ -25,18 +25,11 @@ executable pred
     hs-source-dirs:   app
     main-is:          Main.hs
     -- other-modules:
-    build-depends:
-        base ^>=4.18,
-        dear-imgui,
-        gl,
-        managed,
-        sdl2,
-        text,
-    default-language: GHC2021
+    build-depends:    base, managed, sdl2
+    default-language: GHC2024
     default-extensions:
         BlockArguments,
         ImportQualifiedPost,
-        LambdaCase,
         NoStarIsType,
         OverloadedStrings,
     ghc-options:      -Wall

@@ -1,48 +1,68 @@
 module Main (main) where
 
-import DearImGui
-import DearImGui.OpenGL3
-import DearImGui.SDL
-import DearImGui.SDL.OpenGL
+import Control.Category ((>>>))
+import Control.Exception (bracket)
+import Control.Monad.Managed (liftIO, managed, runManaged)
+import Data.Kind (Type)
+import SDL qualified
+import System.Exit (exitSuccess)
 
-import Graphics.GL
-import SDL
+type Destination m = forall r. (forall t. m t -> r) -> r
 
-import Control.Monad.Managed
-import Control.Monad.IO.Class ()
-import Control.Monad (when)
-import Control.Exception (bracket, bracket_)
-import Data.Text (Text)
+to :: m t -> a -> Destination m
+to m = const $ here m
+
+here :: m t -> Destination m
+here m k = k m
+
+type Update m e = forall s. e s -> m s -> Destination m
+type View m e v = forall s. m s -> v (e s)
+
+runMVU ::
+  forall m e v s r. Monad v => m s -> Update m e -> View m e v -> v r
+runMVU initial update view = go initial
+ where
+  go :: m t -> v r
+  go state = do
+    event <- view state
+    update event state go
+
+data State = Init | Idle
+
+data Model :: State -> Type where
+  MInit :: Model Init
+  MIdle :: SDL.Renderer -> Model Idle
+
+data Event :: State -> Type where
+  Ready :: SDL.Renderer -> Event Init
+  Stay :: Event Idle
 
 main :: IO ()
-main = ("PrEd proof editor" `renderedWhile` notQuitting) do
-  withWindowOpen "Hello, ImGui!" do
-    text "Hello, ImGui!"
-    button "Clickety Click" >>= \clicked ->
-      when clicked $ putStrLn "Ow!"
-  showDemoWindow
+main = runManaged $ runMVU MInit routeTable \case
+ MInit -> do
+  SDL.initializeAll
+  window <- managed $ flip bracket SDL.destroyWindow $
+    SDL.createWindow "PrEd proof editor" SDL.defaultWindow
+      { SDL.windowHighDPI = True
+      , SDL.windowMode = SDL.Maximized
+      , SDL.windowResizable = True
+      }
+  Ready <$> SDL.createRenderer window (-1) SDL.defaultRenderer
+ MIdle renderer -> do
+  events <- SDL.pollEvents
+  let qPressed = any eventIsQPress events
+  SDL.rendererDrawColor renderer SDL.$= SDL.V4 0 0 0 255
+  SDL.clear renderer
+  SDL.present renderer
+  if qPressed then liftIO exitSuccess else pure Stay
  where
-  notQuitting = all ((/= QuitEvent) . eventPayload) <$> pollEventWithImGui
+  routeTable :: Event s -> Model s -> Destination Model
+  routeTable = \case
+    Ready renderer -> to (MIdle renderer)
+    Stay -> here
 
-renderedWhile :: Text -> IO Bool -> IO () -> IO ()
-renderedWhile windowName cond body = initializeAll >> runManaged do
-  window <- managed $ flip bracket destroyWindow $
-    createWindow windowName defaultWindow
-      { windowGraphicsContext = OpenGLContext defaultOpenGL }
-  glContext <- managed $ bracket (glCreateContext window) glDeleteContext
-  _ <- managed (bracket createContext destroyContext)
-  managed_ $ bracket_ (sdl2InitForOpenGL window glContext) sdl2Shutdown
-  managed_ (bracket_ openGL3Init openGL3Shutdown)
-  liftIO $ while cond do
-    openGL3NewFrame >> sdl2NewFrame >> newFrame
-    body
-    glClear GL_COLOR_BUFFER_BIT >> render
-    getDrawData >>= openGL3RenderDrawData
-    glSwapWindow window
-
-while :: Monad m => m Bool -> m a -> m ()
-while cond body = go
- where
-  go = cond >>= \case
-    True -> body >> go
-    False -> pure ()
+  eventIsQPress = SDL.eventPayload >>> \case
+    SDL.KeyboardEvent keyboardEvent ->
+      SDL.keyboardEventKeyMotion keyboardEvent == SDL.Pressed &&
+        SDL.keysymKeycode (SDL.keyboardEventKeysym keyboardEvent) == SDL.KeycodeQ
+    _ -> False
