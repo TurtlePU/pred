@@ -14,24 +14,24 @@ extra-doc-files:    CHANGELOG.md
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
 
-flag dev
-    description:
-        Additional options for development.
-        Enter `$ cabal v2-configure -f dev` to turn on.
-    manual:      True
-    default:     False
+common stanzas
+    default-language: GHC2024
+    ghc-options:      -Wall -Werror
 
 executable pred
-    hs-source-dirs:   app
-    main-is:          Main.hs
+    import:         stanzas
+    hs-source-dirs: app
+    main-is:        Main.hs
     -- other-modules:
-    build-depends:    base, managed, sdl2
-    default-language: GHC2024
+    build-depends:  base, managed, pred, sdl2
     default-extensions:
         BlockArguments,
         ImportQualifiedPost,
         NoStarIsType,
         OverloadedStrings,
-    ghc-options:      -Wall
-    if flag(dev)
-        ghc-options:  -Werror
+
+library
+    import:          stanzas
+    hs-source-dirs:  src
+    exposed-modules: Pred.MVU
+    build-depends:   base
