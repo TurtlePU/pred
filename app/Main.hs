@@ -79,7 +79,11 @@ main = region $ runMVU MInit routeTable \case
   pure $ Ready MkToolkit {..}
  MIdle MkToolkit { config = MkConfig {..}, .. } -> region do
   font <- TTF.load (Text.unpack fontPath) fontSize <...&> TTF.free
-  textLines <- Text.lines <$> liftIO (Text.readFile filePath)
+  textLines <- liftIO do
+    fileExists <- Dir.doesFileExist filePath
+    if fileExists
+    then Text.lines <$> Text.readFile filePath
+    else pure []
   fontSurfaces <- for textLines \line ->
     if Text.null line
     then pure Nothing
