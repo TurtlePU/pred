@@ -28,6 +28,7 @@ executable pred
         base,
         directory,
         fontconfig-pure,
+        optparse-applicative,
         pred,
         sdl2,
         sdl2-ttf,

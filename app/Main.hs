@@ -1,11 +1,14 @@
 module Main (main) where
 
+import Control.Applicative ((<**>))
 import Control.Category ((>>>))
 import System.Exit (exitSuccess)
 
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.IO qualified as Text
 import Graphics.Text.Font.Choose qualified as FC
+import Options.Applicative qualified as Opt
 import SDL qualified
 import SDL.Font qualified as TTF
 import System.Directory qualified as Dir
@@ -14,6 +17,8 @@ import Toml qualified
 import Pred.MVU (Destination (..), runMVU)
 import Pred.Prelude
 import Pred.Region (liftIO, region, (<...&>))
+import Data.Traversable (for)
+import Data.Foldable (for_)
 
 data State = Init | Idle | Term
 
@@ -27,6 +32,7 @@ data Toolkit = MkToolkit
   { window     :: SDL.Window
   , configPath :: FilePath
   , config     :: Config
+  , filePath   :: FilePath
   }
   deriving Generic
 
@@ -43,6 +49,12 @@ data Event :: State -> Type where
 main :: IO ()
 main = region $ runMVU MInit routeTable \case
  MInit -> do
+  filePath :: FilePath <- liftIO $ Opt.execParser $ Opt.info
+    (Opt.strArgument
+      (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
+      <**> Opt.helper)
+    (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
+      <> "an IDE specifically tailored for interactive proof assistants."))
   SDL.initializeAll
   TTF.initialize <...&> const TTF.quit
   window <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
@@ -67,12 +79,23 @@ main = region $ runMVU MInit routeTable \case
   pure $ Ready MkToolkit {..}
  MIdle MkToolkit { config = MkConfig {..}, .. } -> region do
   font <- TTF.load (Text.unpack fontPath) fontSize <...&> TTF.free
-  fontSurface <- TTF.solid font (SDL.V4 255 255 255 255) "lol"
-    <...&> SDL.freeSurface
+  textLines <- Text.lines <$> liftIO (Text.readFile filePath)
+  fontSurfaces <- for textLines \line ->
+    if Text.null line
+    then pure Nothing
+    else do
+      surface <- TTF.solid font (SDL.V4 255 255 255 255) line
+        <...&> SDL.freeSurface
+      pure (Just surface)
   liftIO $ fix \retry -> do
     windowSurface <- SDL.getWindowSurface window
     SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-    _ <- SDL.surfaceBlit fontSurface Nothing windowSurface Nothing
+    lineSkip <- TTF.lineSkip font
+    for_ (zip [0..] fontSurfaces) \(i, fs) -> case fs of
+      Just fontSurface ->
+        SDL.surfaceBlit fontSurface Nothing windowSurface . Just . SDL.P $
+          SDL.V2 0 (i * toEnum lineSkip)
+      Nothing -> pure Nothing
     SDL.updateWindowSurface window
     event <- SDL.waitEvent
     case eventPressKeyCode event of
