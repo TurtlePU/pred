@@ -15,24 +15,34 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common stanzas
-    default-language: GHC2024
-    ghc-options:      -Wall -Werror
+    default-language:   GHC2024
+    default-extensions: ImportQualifiedPost, NoStarIsType
+    ghc-options:        -Wall -Werror
 
 executable pred
     import:         stanzas
     hs-source-dirs: app
     main-is:        Main.hs
     -- other-modules:
-    build-depends:  base, fontconfig-pure, pred, sdl2, sdl2-ttf
+    build-depends:
+        base,
+        directory,
+        fontconfig-pure,
+        pred,
+        sdl2,
+        sdl2-ttf,
+        text,
+        tomland,
     default-extensions:
         BlockArguments,
-        ImportQualifiedPost,
-        NoStarIsType,
+        OverloadedRecordDot,
+        OverloadedRecordUpdate,
         OverloadedStrings,
+        RebindableSyntax,
         RecordWildCards,
 
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.MVU, Pred.Region
-    build-depends:   base, transformers
+    exposed-modules: Pred.MVU, Pred.Prelude, Pred.Region
+    build-depends:   base, generic-lens, transformers
