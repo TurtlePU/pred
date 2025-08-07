@@ -11,7 +11,7 @@ import SDL.Font qualified as TTF
 import System.Directory qualified as Dir
 import Toml qualified
 
-import Pred.MVU (Destination, runMVU, to)
+import Pred.MVU (Destination (..), runMVU)
 import Pred.Prelude
 import Pred.Region (liftIO, region, (<...&>))
 
@@ -86,9 +86,9 @@ main = region $ runMVU MInit routeTable \case
  where
   routeTable :: Event s -> Model s -> Destination Model
   routeTable = \case
-    Ready tk -> to (MIdle tk)
-    FontSizeChanged fontSize -> \(MIdle tk) r -> r $ MIdle tk { config.fontSize }
-    Quit -> \(MIdle MkToolkit {..}) r -> r $ MSave configPath config
+    Ready tk -> \_ -> To (MIdle tk)
+    FontSizeChanged fontSize -> \(MIdle tk) -> To $ MIdle tk { config.fontSize }
+    Quit -> \(MIdle MkToolkit {..}) -> To $ MSave configPath config
 
   eventPressKeyCode = SDL.eventPayload >>> \case
     SDL.KeyboardEvent keyboardEvent

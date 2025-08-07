@@ -16,7 +16,7 @@ extra-doc-files:    CHANGELOG.md
 
 common stanzas
     default-language:   GHC2024
-    default-extensions: ImportQualifiedPost, NoStarIsType
+    default-extensions: BlockArguments, ImportQualifiedPost, NoStarIsType
     ghc-options:        -Wall -Werror
 
 executable pred
@@ -34,7 +34,6 @@ executable pred
         text,
         tomland,
     default-extensions:
-        BlockArguments,
         OverloadedRecordDot,
         OverloadedRecordUpdate,
         OverloadedStrings,
