@@ -23,7 +23,7 @@ executable pred
     hs-source-dirs: app
     main-is:        Main.hs
     -- other-modules:
-    build-depends:  base, fontconfig-pure, managed, pred, sdl2, sdl2-ttf
+    build-depends:  base, fontconfig-pure, pred, sdl2, sdl2-ttf
     default-extensions:
         BlockArguments,
         ImportQualifiedPost,
@@ -34,5 +34,5 @@ executable pred
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.MVU
-    build-depends:   base
+    exposed-modules: Pred.MVU, Pred.Region
+    build-depends:   base, transformers
