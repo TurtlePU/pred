@@ -3,6 +3,9 @@ module Main (main) where
 import Control.Applicative ((<**>))
 import Control.Category ((>>>))
 import Data.Foldable (for_)
+import Data.Int (Int32)
+import Data.List ((!?))
+import Data.Ord (clamp)
 import Data.Traversable (for)
 
 import Data.Text (Text)
@@ -19,7 +22,7 @@ import Pred.MVU (Destination (..), runMVU)
 import Pred.Prelude
 import Pred.Region (liftIO, region, (<...&>))
 
-data State = Init | Idle | Saving
+data InputEvent = KeyPress SDL.Keycode | MouseScroll (SDL.V2 Int32) | OtherEvent
 
 data Config = MkConfig
   { fontPath :: Text
@@ -27,13 +30,18 @@ data Config = MkConfig
   }
   deriving Generic
 
+type ScrollPos = SDL.V2 Int32
+
 data Toolkit = MkToolkit
   { window     :: SDL.Window
   , configPath :: FilePath
   , config     :: Config
   , filePath   :: FilePath
+  , scrollPos  :: ScrollPos
   }
   deriving Generic
+
+data State = Init | Idle | Saving
 
 data Model :: State -> Type where
   MInit :: Model Init
@@ -43,6 +51,7 @@ data Model :: State -> Type where
 data Event :: State -> Type where
   Ready :: Toolkit -> Event Init
   FontSizeChanged :: TTF.PointSize -> Event Idle
+  ScrollPosChanged :: ScrollPos -> Event Idle
   Save :: Event Idle
   Quit :: Event Saving
 
@@ -74,9 +83,8 @@ main = region $ runMVU MInit routeTable \case
           FC.fontMatch fc (FC.nameParse "Fira Code")
         maybe (error "lol no filepath") (pure . Text.pack) $
           FC.getValue "file" pattern
-      let fontSize = 36
-      pure MkConfig {..}
-  pure $ Ready MkToolkit {..}
+      pure MkConfig { fontSize = 36, .. }
+  pure $ Ready MkToolkit { scrollPos = SDL.V2 0 0, .. }
  MIdle MkToolkit { config = MkConfig {..}, .. } -> region do
   font <- TTF.load (Text.unpack fontPath) fontSize <...&> TTF.free
   textLines <- liftIO do
@@ -95,18 +103,32 @@ main = region $ runMVU MInit routeTable \case
     windowSurface <- SDL.getWindowSurface window
     SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
     lineSkip <- TTF.lineSkip font
+    let SDL.V2 colPos linePos = scrollPos
+    colSkip <- case textLines !? fromIntegral linePos of
+      Nothing -> pure 0
+      Just line -> do
+        let pos = fromIntegral colPos
+            start = Text.take pos line
+        (trueWidth, _) <- TTF.size font (Text.take pos line)
+        Just (_, _, _, _, advance) <- TTF.glyphMetrics font 'o'
+        pure $ trueWidth + advance * max 0 (pos - Text.length start)
     for_ (zip [0..] fontSurfaces) \(i, fs) -> case fs of
       Just fontSurface ->
         SDL.surfaceBlit fontSurface Nothing windowSurface . Just . SDL.P $
-          SDL.V2 0 (i * toEnum lineSkip)
+          SDL.V2 (- toEnum colSkip)
+                 ((i - fromIntegral linePos) * toEnum lineSkip)
       Nothing -> pure Nothing
     SDL.updateWindowSurface window
     event <- SDL.waitEvent
-    case eventPressKeyCode event of
-      Just SDL.KeycodeQ      -> pure Save
-      Just SDL.KeycodeEquals -> pure $ FontSizeChanged (fontSize + 1)
-      Just SDL.KeycodeMinus  -> pure $ FontSizeChanged (fontSize - 1)
-      _                      -> retry
+    case interestingEvent event of
+      KeyPress SDL.KeycodeQ      -> pure Save
+      KeyPress SDL.KeycodeEquals -> pure $ FontSizeChanged (fontSize + 1)
+      KeyPress SDL.KeycodeMinus  -> pure $ FontSizeChanged (fontSize - 1)
+      MouseScroll (SDL.V2 dx dy) -> pure $ ScrollPosChanged $
+        SDL.V2 (clamp (0, fromIntegral $ maximum $ map Text.length textLines)
+                      (colPos + dx))
+               (clamp (0, fromIntegral $ length textLines) (linePos - dy))
+      _                          -> retry
  MSave configPath config -> liftIO do
   Quit <$ Toml.encodeToFile Toml.genericCodec configPath config
  where
@@ -114,11 +136,13 @@ main = region $ runMVU MInit routeTable \case
   routeTable = \case
     Ready tk -> \_ -> To (MIdle tk)
     FontSizeChanged fontSize -> \(MIdle tk) -> To $ MIdle tk { config.fontSize }
+    ScrollPosChanged scrollPos -> \(MIdle tk) -> To $ MIdle tk { scrollPos }
     Save -> \(MIdle MkToolkit {..}) -> To $ MSave configPath config
     Quit -> \_ -> Exit ()
 
-  eventPressKeyCode = SDL.eventPayload >>> \case
+  interestingEvent = SDL.eventPayload >>> \case
     SDL.KeyboardEvent keyboardEvent
-      | SDL.keyboardEventKeyMotion keyboardEvent == SDL.Pressed ->
-        Just $ SDL.keysymKeycode (SDL.keyboardEventKeysym keyboardEvent)
-    _ -> Nothing
+      | keyboardEvent.keyboardEventKeyMotion == SDL.Pressed ->
+        KeyPress keyboardEvent.keyboardEventKeysym.keysymKeycode
+    SDL.MouseWheelEvent wheelEvent -> MouseScroll wheelEvent.mouseWheelEventPos
+    _ -> OtherEvent
