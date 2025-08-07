@@ -2,7 +2,8 @@ module Main (main) where
 
 import Control.Applicative ((<**>))
 import Control.Category ((>>>))
-import System.Exit (exitSuccess)
+import Data.Foldable (for_)
+import Data.Traversable (for)
 
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -17,10 +18,8 @@ import Toml qualified
 import Pred.MVU (Destination (..), runMVU)
 import Pred.Prelude
 import Pred.Region (liftIO, region, (<...&>))
-import Data.Traversable (for)
-import Data.Foldable (for_)
 
-data State = Init | Idle | Term
+data State = Init | Idle | Saving
 
 data Config = MkConfig
   { fontPath :: Text
@@ -39,12 +38,13 @@ data Toolkit = MkToolkit
 data Model :: State -> Type where
   MInit :: Model Init
   MIdle :: Toolkit -> Model Idle
-  MSave :: FilePath -> Config -> Model Term
+  MSave :: FilePath -> Config -> Model Saving
 
 data Event :: State -> Type where
   Ready :: Toolkit -> Event Init
   FontSizeChanged :: TTF.PointSize -> Event Idle
-  Quit :: Event Idle
+  Save :: Event Idle
+  Quit :: Event Saving
 
 main :: IO ()
 main = region $ runMVU MInit routeTable \case
@@ -103,19 +103,19 @@ main = region $ runMVU MInit routeTable \case
     SDL.updateWindowSurface window
     event <- SDL.waitEvent
     case eventPressKeyCode event of
-      Just SDL.KeycodeQ      -> pure Quit
+      Just SDL.KeycodeQ      -> pure Save
       Just SDL.KeycodeEquals -> pure $ FontSizeChanged (fontSize + 1)
       Just SDL.KeycodeMinus  -> pure $ FontSizeChanged (fontSize - 1)
       _                      -> retry
  MSave configPath config -> liftIO do
-  _ <- Toml.encodeToFile Toml.genericCodec configPath config
-  exitSuccess
+  Quit <$ Toml.encodeToFile Toml.genericCodec configPath config
  where
-  routeTable :: Event s -> Model s -> Destination Model
+  routeTable :: Event s -> Model s -> Destination Model ()
   routeTable = \case
     Ready tk -> \_ -> To (MIdle tk)
     FontSizeChanged fontSize -> \(MIdle tk) -> To $ MIdle tk { config.fontSize }
-    Quit -> \(MIdle MkToolkit {..}) -> To $ MSave configPath config
+    Save -> \(MIdle MkToolkit {..}) -> To $ MSave configPath config
+    Quit -> \_ -> Exit ()
 
   eventPressKeyCode = SDL.eventPayload >>> \case
     SDL.KeyboardEvent keyboardEvent
