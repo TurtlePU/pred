@@ -3,10 +3,7 @@ module Pred.MVU where
 type Destination m = forall r. (forall t. m t -> r) -> r
 
 to :: m t -> a -> Destination m
-to m = const $ here m
-
-here :: m t -> Destination m
-here m k = k m
+to m _ k = k m
 
 type Update m e = forall s. e s -> m s -> Destination m
 type View m e v = forall s. m s -> v (e s)

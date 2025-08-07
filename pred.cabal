@@ -23,12 +23,13 @@ executable pred
     hs-source-dirs: app
     main-is:        Main.hs
     -- other-modules:
-    build-depends:  base, managed, pred, sdl2
+    build-depends:  base, fontconfig-pure, managed, pred, sdl2, sdl2-ttf
     default-extensions:
         BlockArguments,
         ImportQualifiedPost,
         NoStarIsType,
         OverloadedStrings,
+        RecordWildCards,
 
 library
     import:          stanzas
