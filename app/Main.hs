@@ -71,7 +71,7 @@ main = do
         liftIO $ flip fix (SDL.V2 0 0) \loop (SDL.V2 colPos linePos) -> do
           windowSurface <- SDL.getWindowSurface window
           SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-          lineSkip <- TTF.lineSkip font
+          lineSkip <- toEnum <$> TTF.lineSkip font
           colSkip <- case textLines !? fromIntegral linePos of
             Nothing -> pure 0
             Just line -> do
@@ -80,11 +80,15 @@ main = do
               (trueWidth, _) <- TTF.size font (Text.take pos line)
               Just (_, _, _, _, advance) <- TTF.glyphMetrics font 'o'
               pure $ trueWidth + advance * max 0 (pos - Text.length start)
+          SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
           for_ (zip [0..] fontSurfaces) \(i, fs) -> case fs of
-            Just fontSurface ->
-              SDL.surfaceBlit fontSurface Nothing windowSurface . Just . SDL.P $
-                SDL.V2 (- toEnum colSkip)
-                       ((i - fromIntegral linePos) * toEnum lineSkip)
+            Just fontSurface -> do
+              let blitY = (i - fromIntegral linePos) * lineSkip
+                  blitPos = SDL.V2 (-toEnum colSkip) blitY
+              if 0 <= blitY && blitY < windowHeight
+              then SDL.surfaceBlit fontSurface Nothing windowSurface $
+                Just (SDL.P blitPos)
+              else pure Nothing
             Nothing -> pure Nothing
           SDL.updateWindowSurface window
           event <- SDL.waitEvent
