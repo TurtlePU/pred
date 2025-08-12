@@ -44,5 +44,5 @@ executable pred
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.MVU, Pred.Prelude, Pred.Region
+    exposed-modules: Pred.Prelude, Pred.Region
     build-depends:   base, generic-lens, transformers
