@@ -30,6 +30,7 @@ executable pred
         fontconfig-pure,
         optparse-applicative,
         pred,
+        resourcet,
         sdl2,
         sdl2-ttf,
         text,
@@ -44,5 +45,5 @@ executable pred
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.Prelude, Pred.Region
-    build-depends:   base, generic-lens, transformers
+    exposed-modules: Pred.Prelude
+    build-depends:   base, generic-lens

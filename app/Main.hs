@@ -9,6 +9,8 @@ import Data.List ((!?))
 import Data.Ord (clamp)
 import Data.Traversable (for)
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Resource (allocate, allocate_, runResourceT)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -20,7 +22,6 @@ import System.Directory qualified as Dir
 import Toml qualified
 
 import Pred.Prelude
-import Pred.Region
 
 data InputEvent = KeyPress SDL.Keycode | MouseScroll (SDL.V2 Int32) | OtherEvent
 
@@ -52,22 +53,22 @@ main = do
       fontPath <- maybe (error "lol no filepath") (pure . Text.pack) $
         FC.getValue "file" pattern
       pure MkConfig { fontSize = 36, .. }
-  region do
-    TTF.initialize <...&> const TTF.quit
-    window <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
+  runResourceT do
+    _ <- TTF.initialize `allocate_` TTF.quit
+    (_, window) <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
       { windowHighDPI = True
       , windowMode = SDL.Maximized
       , windowResizable = True
-      } <...&> SDL.destroyWindow
+      } `allocate` SDL.destroyWindow
     liftIO $ flip fix initialConfig \changeConfig config -> do
-      newConfig <- region do
-        font <- TTF.load (Text.unpack config.fontPath) config.fontSize
-                  <...&> TTF.free
+      newConfig <- runResourceT do
+        (_, font) <- TTF.load (Text.unpack config.fontPath) config.fontSize
+                  `allocate` TTF.free
         fontSurfaces <- for textLines \line ->
           if Text.null line
           then pure Nothing
-          else Just <$> (TTF.solid font (SDL.V4 255 255 255 255) line
-                          <...&> SDL.freeSurface)
+          else Just . snd <$> (TTF.solid font (SDL.V4 255 255 255 255) line
+                          `allocate` SDL.freeSurface)
         liftIO $ flip fix (SDL.V2 0 0) \loop (SDL.V2 colPos linePos) -> do
           windowSurface <- SDL.getWindowSurface window
           SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
