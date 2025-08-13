@@ -78,7 +78,7 @@ main = Resource.runResourceT do
     , windowResizable = True
     } `Resource.allocate` SDL.destroyWindow
   configPath <- liftIO $ Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
-  initialFontData <- do
+  fd <- do
     config <- liftIO $ Dir.doesFileExist configPath >>= \case
       True -> Toml.decodeFile Toml.genericCodec configPath
       False -> do
@@ -89,45 +89,47 @@ main = Resource.runResourceT do
           FC.getValue "file" pattern
         pure MkConfig { fontSize = 36, .. }
     newFontData config textLines
-  flip fix initialFontData \changeData fontData -> do
-    flip fix (SDL.V2 0 0) \loop (SDL.V2 colPos linePos) -> do
-      windowSurface <- SDL.getWindowSurface window
-      SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-      lineSkip <- toEnum <$> TTF.lineSkip fontData.font
-      colSkip <- case textLines !? fromIntegral linePos of
-        Nothing -> pure 0
-        Just line -> do
-          let pos = fromIntegral colPos
-              start = Text.take pos line
-          (trueWidth, _) <- TTF.size fontData.font (Text.take pos line)
-          Just (_, _, _, _, advance) <- TTF.glyphMetrics fontData.font 'o'
-          pure $ trueWidth + advance * max 0 (pos - Text.length start)
-      SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
-      for_ fontData.fontSurfaces \(i, fontSurface) -> do
-        let blitY = (i - fromIntegral linePos) * lineSkip
-            blitPos = SDL.V2 (-toEnum colSkip) blitY
-        if 0 <= blitY && blitY < windowHeight
-        then SDL.surfaceBlit fontSurface Nothing windowSurface $
-          Just (SDL.P blitPos)
-        else pure Nothing
-      SDL.updateWindowSurface window
-      event <- SDL.waitEvent
-      case interestingEvent event of
-        KeyPress SDL.KeycodeQ      -> fontData.saveConfig configPath
-        KeyPress SDL.KeycodeEquals -> do
-          fontData' <- fontData.recreate \config -> config
-            { fontSize = config.fontSize + 1 }
-          changeData fontData'
-        KeyPress SDL.KeycodeMinus  -> do
-          fontData' <- fontData.recreate \config -> config
-            { fontSize = config.fontSize - 1 }
-          changeData fontData'
-        MouseScroll (SDL.V2 dx dy) -> loop $ SDL.V2
-          (clamp (0, fromIntegral $ maximum $ map Text.length textLines)
-                 (colPos + dx))
-          (clamp (0, fromIntegral $ length textLines)
-                 (linePos - dy))
-        _                          -> loop (SDL.V2 colPos linePos)
+  flip fix (fd, SDL.V2 0 0) \loop (fontData, scrollPos) -> do
+    windowSurface <- SDL.getWindowSurface window
+    SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
+    lineSkip <- toEnum <$> TTF.lineSkip fontData.font
+    let SDL.V2 colPos linePos = scrollPos
+    colSkip <- case textLines !? fromIntegral linePos of
+      Nothing -> pure 0
+      Just line -> do
+        let pos = fromIntegral colPos
+            start = Text.take pos line
+        (trueWidth, _) <- TTF.size fontData.font (Text.take pos line)
+        Just (_, _, _, _, advance) <- TTF.glyphMetrics fontData.font 'o'
+        pure $ trueWidth + advance * max 0 (pos - Text.length start)
+    SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
+    for_ fontData.fontSurfaces \(i, fontSurface) -> do
+      let blitY = (i - fromIntegral linePos) * lineSkip
+          blitPos = SDL.V2 (-toEnum colSkip) blitY
+      if 0 <= blitY && blitY < windowHeight
+      then SDL.surfaceBlit fontSurface Nothing windowSurface $
+        Just (SDL.P blitPos)
+      else pure Nothing
+    SDL.updateWindowSurface window
+    event <- SDL.waitEvent
+    case interestingEvent event of
+      KeyPress SDL.KeycodeQ      -> fontData.saveConfig configPath
+      KeyPress SDL.KeycodeEquals -> do
+        fontData' <- fontData.recreate \config -> config
+          { fontSize = config.fontSize + 1 }
+        loop (fontData', scrollPos)
+      KeyPress SDL.KeycodeMinus  -> do
+        fontData' <- fontData.recreate \config -> config
+          { fontSize = config.fontSize - 1 }
+        loop (fontData', scrollPos)
+      MouseScroll (SDL.V2 dx dy) -> do
+        let scrollPos' = SDL.V2
+              (clamp (0, fromIntegral $ maximum $ map Text.length textLines)
+                     (colPos + dx))
+              (clamp (0, fromIntegral $ length textLines)
+                     (linePos - dy))
+        loop (fontData, scrollPos')
+      _                          -> loop (fontData, scrollPos)
  where
   interestingEvent = SDL.eventPayload >>> \case
     SDL.KeyboardEvent keyboardEvent
