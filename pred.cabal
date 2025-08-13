@@ -30,6 +30,7 @@ executable pred
         fontconfig-pure,
         optparse-applicative,
         pred,
+        reactive-banana,
         resourcet,
         sdl2,
         sdl2-ttf,

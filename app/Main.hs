@@ -3,13 +3,15 @@ module Main (main) where
 import Control.Applicative ((<**>))
 import Control.Category ((>>>))
 import Control.Monad (void)
-import Data.Foldable (for_)
+import Data.Foldable (fold, for_)
+import Data.Functor ((<&>))
 import Data.Int (Int32)
 import Data.List ((!?))
 import Data.Maybe (catMaybes)
 import Data.Ord (clamp)
 import Data.Traversable (for)
 import Foreign.C (CInt)
+import System.Exit (exitSuccess)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Resource qualified as Resource
@@ -18,6 +20,8 @@ import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Graphics.Text.Font.Choose qualified as FC
 import Options.Applicative qualified as Opt
+import Reactive.Banana qualified as Banana
+import Reactive.Banana.Frameworks qualified as Banana
 import SDL qualified
 import SDL.Font qualified as TTF
 import System.Directory qualified as Dir
@@ -34,10 +38,10 @@ data Config = MkConfig
   deriving Generic
 
 data FontData m = MkFontData
-  { font :: TTF.Font
+  { font         :: TTF.Font
   , fontSurfaces :: [(CInt, SDL.Surface)]
-  , recreate :: (Config -> Config) -> m (FontData m)
-  , saveConfig :: FilePath -> m ()
+  , recreate     :: (Config -> Config) -> m (FontData m)
+  , saveConfig   :: FilePath -> m ()
   }
   deriving Generic
 
@@ -58,6 +62,53 @@ newFontData config textLines = do
       saveConfig configPath =
         freeFont >> void (Toml.encodeToFile Toml.genericCodec configPath config)
   pure MkFontData {..}
+
+banana ::
+  SDL.Window -> Text -> FilePath -> TTF.PointSize ->
+  Banana.AddHandler SDL.Event -> Banana.MomentIO ()
+banana window text fontPath initialFontSize handler = do
+  sdlE <- Banana.fromAddHandler handler
+  let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
+        case e.eventPayload of
+          SDL.KeyboardEvent ked
+            | ked.keyboardEventKeyMotion == SDL.Pressed ->
+              Just (Left ked.keyboardEventKeysym.keysymKeycode)
+          SDL.MouseWheelEvent mwed -> Just $ Right
+            (fromIntegral <$> mwed.mouseWheelEventPos)
+          _ -> Nothing
+      (exitKey, resize) = Banana.split $ Banana.filterJust $ press <&> \case
+        SDL.KeycodeQ -> Just (Left ())
+        SDL.KeycodeEquals -> Just (Right 1)
+        SDL.KeycodeMinus -> Just (Right (-1))
+        _ -> Nothing
+      textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
+      scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
+                            (length textLines)
+  exitKeyOnce <- Banana.once exitKey
+  let exit = exitSuccess <$ exitKeyOnce
+  position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
+  fontSize <- Banana.accumE initialFontSize $ fmap (+) resize
+  font <- Banana.mapEventIO (TTF.load fontPath) fontSize
+  textSurfaces <- Banana.mapEventIO (for textLines . traverse . renderLine) font
+  fontB <- Banana.stepper Nothing (Just <$> font)
+  textSurfacesB <- Banana.stepper Nothing (Just <$> textSurfaces)
+  let oldFonts = fontSize Banana.@> fontB
+      oldSurfaces = font Banana.@> textSurfacesB
+      freeOldFonts = foldMap TTF.free <$> oldFonts
+      freeOldSurfaces =
+        foldMap (foldMap $ SDL.freeSurface . snd) <$> oldSurfaces
+      lineSkip = TTF.lineSkip <$> font
+      render = renderAll window <$> position Banana.<@> textSurfaces
+  Banana.reactimate $ fold
+    [ freeOldFonts
+    , freeOldSurfaces
+    , exit
+    ]
+  where
+    updateSP (SDL.V2 maxX maxY) (SDL.V2 dx dy) (SDL.V2 x y) = SDL.V2
+      (clamp (0, maxX) (x + dx)) (clamp (0, maxY) (y - dy))
+    renderLine = (`TTF.solid` SDL.V4 255 255 255 255)
+    renderAll ww (SDL.V2 colPos rowPos) surfaces = _
 
 main :: IO ()
 main = Resource.runResourceT do
