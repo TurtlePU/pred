@@ -87,13 +87,15 @@ banana window text configPath initialConfig handler = do
       textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (length textLines)
+      initialPos = SDL.V2 0 0
   initialFontCache <- newFontCache initialConfig textLines
   fontCache <- liftIO $ newIORef initialFontCache
-  position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
+  position <- Banana.accumB initialPos $ scroll <&> updateSP scrollBounds
   config <- Banana.accumB initialConfig $ resize <&> \ds config -> config
     { fontSize = config.fontSize + ds }
   render <- Banana.changes $ renderAll fontCache <$> position <*> config
   Banana.reactimate' render
+  liftIO (renderAll fontCache initialPos initialConfig)
   onceExit <- Banana.once exitKey
   Banana.reactimate $ onceExit $> do
     lastFontCache <- readIORef fontCache
