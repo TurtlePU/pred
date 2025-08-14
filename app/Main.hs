@@ -66,10 +66,28 @@ refreshed refresh ref = do
   liftIO (writeIORef ref new)
   pure new
 
-banana ::
-  SDL.Window -> Text -> FilePath -> Config ->
-  Banana.AddHandler SDL.Event -> Banana.MomentIO ()
-banana window text configPath initialConfig handler = do
+banana :: SDL.Window -> Banana.AddHandler SDL.Event -> Banana.MomentIO ()
+banana window handler = do
+  filePath <- liftIO $ Opt.execParser $ Opt.info
+    (Opt.strArgument
+      (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
+        <**> Opt.helper)
+    (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
+      <> "an IDE specifically tailored for interactive proof assistants."))
+  text <- liftIO $ Dir.doesFileExist filePath >>= \case
+    True -> Text.readFile filePath
+    False -> pure ""
+  configPath <- liftIO $ Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
+  initialConfig <- liftIO $ Dir.doesFileExist configPath >>= \case
+    True -> Toml.decodeFile Toml.genericCodec configPath
+    False -> do
+      fc <- FC.initLoadConfigAndFonts
+      pattern <- maybe (error "lol no Fira Code") pure $
+        FC.fontMatch fc (FC.nameParse "Fira Code")
+      fontPath <- maybe (error "lol no filepath") (pure . Text.pack) $
+        FC.getValue "file" pattern
+      pure MkConfig { fontSize = 36, .. }
+  SDL.initializeAll
   sdlE <- Banana.fromAddHandler handler
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
@@ -132,34 +150,14 @@ banana window text configPath initialConfig handler = do
 
 main :: IO ()
 main = Resource.runResourceT do
-  _ <- TTF.initialize `Resource.allocate_` TTF.quit
   (_, window) <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
     { windowHighDPI = True
     , windowMode = SDL.Maximized
     , windowResizable = True
     } `Resource.allocate` SDL.destroyWindow
+  _ <- TTF.initialize `Resource.allocate_` TTF.quit
   liftIO do
-    filePath <- Opt.execParser $ Opt.info
-      (Opt.strArgument
-        (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
-          <**> Opt.helper)
-      (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
-        <> "an IDE specifically tailored for interactive proof assistants."))
-    text <- Dir.doesFileExist filePath >>= \case
-      True -> Text.readFile filePath
-      False -> pure ""
-    SDL.initializeAll
-    configPath <- Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
-    config <- Dir.doesFileExist configPath >>= \case
-      True -> Toml.decodeFile Toml.genericCodec configPath
-      False -> do
-        fc <- FC.initLoadConfigAndFonts
-        pattern <- maybe (error "lol no Fira Code") pure $
-          FC.fontMatch fc (FC.nameParse "Fira Code")
-        fontPath <- maybe (error "lol no filepath") (pure . Text.pack) $
-          FC.getValue "file" pattern
-        pure MkConfig { fontSize = 36, .. }
     (addHandler, fire) <- Banana.newAddHandler
-    network <- Banana.compile (banana window text configPath config addHandler)
+    network <- Banana.compile (banana window addHandler)
     Banana.actuate network
     forever (SDL.waitEvent >>= fire)
