@@ -1,19 +1,16 @@
 module Main (main) where
 
 import Control.Applicative ((<**>))
-import Control.Category ((>>>))
-import Control.Monad (void)
-import Data.Foldable (fold, for_)
-import Data.Functor ((<&>))
-import Data.Int (Int32)
-import Data.List ((!?))
-import Data.Maybe (catMaybes)
+import Control.Monad (forever)
+import Data.Foldable (for_)
+import Data.Functor (($>), (<&>))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Ord (clamp)
 import Data.Traversable (for)
 import Foreign.C (CInt)
 import System.Exit (exitSuccess)
 
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource qualified as Resource
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -29,44 +26,50 @@ import Toml qualified
 
 import Pred.Prelude
 
-data InputEvent = KeyPress SDL.Keycode | MouseScroll (SDL.V2 Int32) | OtherEvent
-
 data Config = MkConfig
   { fontPath :: Text
   , fontSize :: TTF.PointSize
   }
-  deriving Generic
+  deriving (Generic, Eq)
 
-data FontData m = MkFontData
-  { font         :: TTF.Font
-  , fontSurfaces :: [(CInt, SDL.Surface)]
-  , recreate     :: (Config -> Config) -> m (FontData m)
-  , saveConfig   :: FilePath -> m ()
+data FontCache = MkFontCache
+  { lastConfig   :: Config
+  , lastFont     :: TTF.Font
+  , lastSurfaces :: [(CInt, Text, SDL.Surface)]
   }
   deriving Generic
 
-newFontData ::
-  Resource.MonadResource m => Config -> [Text] -> m (FontData m)
-newFontData config textLines = do
-  (fontRK, font) <- TTF.load (Text.unpack config.fontPath) config.fontSize
-                      `Resource.allocate` TTF.free
-  (surfacesRK, fontSurfaces) <- unzip . catMaybes <$> for (zip [0..] textLines)
-    \(lineNum, line) ->
-      if Text.null line
-      then pure Nothing
-      else Just . fmap (lineNum ,) <$>
-        (TTF.solid font (SDL.V4 255 255 255 255) line
-          `Resource.allocate` SDL.freeSurface)
-  let freeFont = Resource.release fontRK >> for_ surfacesRK Resource.release
-      recreate update = freeFont >> newFontData (update config) textLines
-      saveConfig configPath =
-        freeFont >> void (Toml.encodeToFile Toml.genericCodec configPath config)
-  pure MkFontData {..}
+newFontCache :: MonadIO m => Config -> [(CInt, Text)] -> m FontCache
+newFontCache lastConfig textLines = do
+  lastFont <- TTF.load (Text.unpack lastConfig.fontPath) lastConfig.fontSize
+  lastSurfaces <- for textLines \(i, l) ->
+    (i,l,) <$> TTF.solid lastFont (SDL.V4 255 255 255 255) l
+  pure MkFontCache {..}
+
+freeCache :: MonadIO m => FontCache -> m ()
+freeCache cache = do
+  TTF.free cache.lastFont
+  for_ cache.lastSurfaces \(_,_,s) -> SDL.freeSurface s
+
+refreshCache :: MonadIO m => Config -> FontCache -> m FontCache
+refreshCache newConfig cache =
+  if newConfig == cache.lastConfig
+  then pure cache
+  else do
+    freeCache cache
+    newFontCache newConfig $ cache.lastSurfaces <&> \(i,l,_) -> (i,l)
+
+refreshed :: MonadIO m => (a -> m a) -> IORef a -> m a
+refreshed refresh ref = do
+  old <- liftIO (readIORef ref)
+  new <- refresh old
+  liftIO (writeIORef ref new)
+  pure new
 
 banana ::
-  SDL.Window -> Text -> FilePath -> TTF.PointSize ->
+  SDL.Window -> Text -> FilePath -> Config ->
   Banana.AddHandler SDL.Event -> Banana.MomentIO ()
-banana window text fontPath initialFontSize handler = do
+banana window text configPath initialConfig handler = do
   sdlE <- Banana.fromAddHandler handler
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
@@ -84,53 +87,68 @@ banana window text fontPath initialFontSize handler = do
       textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (length textLines)
-  exitKeyOnce <- Banana.once exitKey
-  let exit = exitSuccess <$ exitKeyOnce
+  initialFontCache <- newFontCache initialConfig textLines
+  fontCache <- liftIO $ newIORef initialFontCache
   position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
-  fontSize <- Banana.accumE initialFontSize $ fmap (+) resize
-  font <- Banana.mapEventIO (TTF.load fontPath) fontSize
-  textSurfaces <- Banana.mapEventIO (for textLines . traverse . renderLine) font
-  fontB <- Banana.stepper Nothing (Just <$> font)
-  textSurfacesB <- Banana.stepper Nothing (Just <$> textSurfaces)
-  let oldFonts = fontSize Banana.@> fontB
-      oldSurfaces = font Banana.@> textSurfacesB
-      freeOldFonts = foldMap TTF.free <$> oldFonts
-      freeOldSurfaces =
-        foldMap (foldMap $ SDL.freeSurface . snd) <$> oldSurfaces
-      lineSkip = TTF.lineSkip <$> font
-      render = renderAll window <$> position Banana.<@> textSurfaces
-  Banana.reactimate $ fold
-    [ freeOldFonts
-    , freeOldSurfaces
-    , exit
-    ]
+  config <- Banana.accumB initialConfig $ resize <&> \ds config -> config
+    { fontSize = config.fontSize + ds }
+  render <- Banana.changes $ renderAll fontCache <$> position <*> config
+  Banana.reactimate' render
+  onceExit <- Banana.once exitKey
+  Banana.reactimate $ onceExit $> do
+    lastFontCache <- readIORef fontCache
+    freeCache lastFontCache
+    _ <- Toml.encodeToFile Toml.genericCodec configPath lastFontCache.lastConfig
+    exitSuccess
   where
     updateSP (SDL.V2 maxX maxY) (SDL.V2 dx dy) (SDL.V2 x y) = SDL.V2
       (clamp (0, maxX) (x + dx)) (clamp (0, maxY) (y - dy))
-    renderLine = (`TTF.solid` SDL.V4 255 255 255 255)
-    renderAll ww (SDL.V2 colPos rowPos) surfaces = _
+    renderAll fc (SDL.V2 colPos linePos) config = do
+      windowSurface <- SDL.getWindowSurface window
+      SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
+      fontCache <- refreshed (refreshCache config) fc
+      lineSkip <- toEnum <$> TTF.lineSkip fontCache.lastFont
+      colSkip <- case lookup
+                        (fromIntegral linePos)
+                        ((\(i,l,_) -> (i, l)) <$> fontCache.lastSurfaces) of
+        Nothing -> pure 0
+        Just line -> do
+          let pos = fromIntegral colPos
+              start = Text.take pos line
+          (trueWidth, _) <- TTF.size fontCache.lastFont (Text.take pos line)
+          Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache.lastFont 'o'
+          pure $ trueWidth + advance * max 0 (pos - Text.length start)
+      SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
+      for_ fontCache.lastSurfaces \(i, _, fontSurface) -> do
+        let blitY = (i - toEnum linePos) * lineSkip
+            blitPos = SDL.V2 (-toEnum colSkip) blitY
+        if 0 <= blitY && blitY < windowHeight
+        then SDL.surfaceBlit fontSurface Nothing windowSurface $
+          Just (SDL.P blitPos)
+        else pure Nothing
+      SDL.updateWindowSurface window
 
 main :: IO ()
 main = Resource.runResourceT do
-  filePath <- liftIO $ Opt.execParser $ Opt.info
-    (Opt.strArgument
-      (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
-        <**> Opt.helper)
-    (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
-      <> "an IDE specifically tailored for interactive proof assistants."))
-  textLines <- liftIO $ Dir.doesFileExist filePath >>= \case
-    True -> Text.lines <$> Text.readFile filePath
-    False -> pure []
-  SDL.initializeAll
   _ <- TTF.initialize `Resource.allocate_` TTF.quit
   (_, window) <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
     { windowHighDPI = True
     , windowMode = SDL.Maximized
     , windowResizable = True
     } `Resource.allocate` SDL.destroyWindow
-  configPath <- liftIO $ Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
-  fd <- do
-    config <- liftIO $ Dir.doesFileExist configPath >>= \case
+  liftIO do
+    filePath <- Opt.execParser $ Opt.info
+      (Opt.strArgument
+        (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
+          <**> Opt.helper)
+      (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
+        <> "an IDE specifically tailored for interactive proof assistants."))
+    text <- Dir.doesFileExist filePath >>= \case
+      True -> Text.readFile filePath
+      False -> pure ""
+    SDL.initializeAll
+    configPath <- Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
+    config <- Dir.doesFileExist configPath >>= \case
       True -> Toml.decodeFile Toml.genericCodec configPath
       False -> do
         fc <- FC.initLoadConfigAndFonts
@@ -139,52 +157,7 @@ main = Resource.runResourceT do
         fontPath <- maybe (error "lol no filepath") (pure . Text.pack) $
           FC.getValue "file" pattern
         pure MkConfig { fontSize = 36, .. }
-    newFontData config textLines
-  flip fix (fd, SDL.V2 0 0) \loop (fontData, scrollPos) -> do
-    windowSurface <- SDL.getWindowSurface window
-    SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-    lineSkip <- toEnum <$> TTF.lineSkip fontData.font
-    let SDL.V2 colPos linePos = scrollPos
-    colSkip <- case textLines !? fromIntegral linePos of
-      Nothing -> pure 0
-      Just line -> do
-        let pos = fromIntegral colPos
-            start = Text.take pos line
-        (trueWidth, _) <- TTF.size fontData.font (Text.take pos line)
-        Just (_, _, _, _, advance) <- TTF.glyphMetrics fontData.font 'o'
-        pure $ trueWidth + advance * max 0 (pos - Text.length start)
-    SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
-    for_ fontData.fontSurfaces \(i, fontSurface) -> do
-      let blitY = (i - fromIntegral linePos) * lineSkip
-          blitPos = SDL.V2 (-toEnum colSkip) blitY
-      if 0 <= blitY && blitY < windowHeight
-      then SDL.surfaceBlit fontSurface Nothing windowSurface $
-        Just (SDL.P blitPos)
-      else pure Nothing
-    SDL.updateWindowSurface window
-    event <- SDL.waitEvent
-    case interestingEvent event of
-      KeyPress SDL.KeycodeQ      -> fontData.saveConfig configPath
-      KeyPress SDL.KeycodeEquals -> do
-        fontData' <- fontData.recreate \config -> config
-          { fontSize = config.fontSize + 1 }
-        loop (fontData', scrollPos)
-      KeyPress SDL.KeycodeMinus  -> do
-        fontData' <- fontData.recreate \config -> config
-          { fontSize = config.fontSize - 1 }
-        loop (fontData', scrollPos)
-      MouseScroll (SDL.V2 dx dy) -> do
-        let scrollPos' = SDL.V2
-              (clamp (0, fromIntegral $ maximum $ map Text.length textLines)
-                     (colPos + dx))
-              (clamp (0, fromIntegral $ length textLines)
-                     (linePos - dy))
-        loop (fontData, scrollPos')
-      _                          -> loop (fontData, scrollPos)
- where
-  interestingEvent = SDL.eventPayload >>> \case
-    SDL.KeyboardEvent keyboardEvent
-      | keyboardEvent.keyboardEventKeyMotion == SDL.Pressed ->
-        KeyPress keyboardEvent.keyboardEventKeysym.keysymKeycode
-    SDL.MouseWheelEvent wheelEvent -> MouseScroll wheelEvent.mouseWheelEventPos
-    _ -> OtherEvent
+    (addHandler, fire) <- Banana.newAddHandler
+    network <- Banana.compile (banana window text configPath config addHandler)
+    Banana.actuate network
+    forever (SDL.waitEvent >>= fire)
