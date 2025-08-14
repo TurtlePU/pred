@@ -16,7 +16,15 @@ extra-doc-files:    CHANGELOG.md
 
 common stanzas
     default-language:   GHC2024
-    default-extensions: BlockArguments, ImportQualifiedPost, NoStarIsType
+    default-extensions:
+        BlockArguments,
+        ImportQualifiedPost,
+        NoStarIsType,
+        OverloadedRecordDot,
+        OverloadedRecordUpdate,
+        OverloadedStrings,
+        RebindableSyntax,
+        RecordWildCards,
     ghc-options:        -Wall -Werror
 
 executable pred
@@ -33,18 +41,11 @@ executable pred
         reactive-banana,
         resourcet,
         sdl2,
-        sdl2-ttf,
         text,
         tomland,
-    default-extensions:
-        OverloadedRecordDot,
-        OverloadedRecordUpdate,
-        OverloadedStrings,
-        RebindableSyntax,
-        RecordWildCards,
 
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.Prelude
-    build-depends:   base, generic-lens
+    exposed-modules: Pred.Prelude, Pred.TTF
+    build-depends:   base, containers, generic-lens, sdl2, sdl2-ttf, text
