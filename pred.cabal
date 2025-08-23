@@ -47,5 +47,11 @@ executable pred
 library
     import:          stanzas
     hs-source-dirs:  src
-    exposed-modules: Pred.Prelude, Pred.TTF
-    build-depends:   base, containers, generic-lens, sdl2, sdl2-ttf, text
+    exposed-modules: Pred.Prelude, Pred.StableCache, Pred.TTF
+    build-depends:
+        base,
+        generic-lens,
+        sdl2,
+        sdl2-ttf,
+        text,
+        unordered-containers,

@@ -93,7 +93,7 @@ banana window fonts handler = do
     renderAll textLines (SDL.V2 colPos linePos) font = do
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-      fontCache <- TTF.editorFont fonts font
+      fontCache <- TTF.load fonts font
       lineSkip <- toEnum <$> TTF.lineSkip fontCache
       colSkip <- case lookup (fromIntegral linePos) textLines of
         Nothing -> pure 0
