@@ -43,8 +43,6 @@ banana ::
   SDL.Window -> TTF.Fonts ->
   Banana.AddHandler SDL.Event -> Banana.AddHandler () -> Banana.MomentIO ()
 banana window fonts sdlHandler timerHandler = do
-  timerE <- Banana.fromAddHandler timerHandler
-  Banana.reactimate $ putStrLn "cocoo" <$ timerE
   filePath <- liftIO $ Opt.execParser $ Opt.info
     (Opt.strArgument
       (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
@@ -74,6 +72,13 @@ banana window fonts sdlHandler timerHandler = do
           SDL.MouseWheelEvent mwed -> Just $ Right
             (fromIntegral <$> mwed.mouseWheelEventPos)
           _ -> Nothing
+      clicks = Banana.filterJust $ sdlE <&> \e ->
+        case e.eventPayload of
+          SDL.MouseButtonEvent mbed
+            | mbed.mouseButtonEventMotion == SDL.Pressed
+              && mbed.mouseButtonEventWindow == Just window ->
+                Just mbed.mouseButtonEventPos
+          _ -> Nothing
       (exitKey, resize) = Banana.split $ Banana.filterJust $ press <&> \case
         SDL.KeycodeQ -> Just (Left ())
         SDL.KeycodeEquals -> Just (Right 1)
@@ -83,12 +88,17 @@ banana window fonts sdlHandler timerHandler = do
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (maximum (0 : map (succ . fst) textLines))
       initialPos = SDL.V2 0 0
+      initialDrawCursor = True
+      initialClick = SDL.P (SDL.V2 0 0)
+  timerE <- Banana.fromAddHandler timerHandler
+  drawCursor <- Banana.accumB initialDrawCursor (not <$ timerE)
+  click <- Banana.stepper initialClick clicks
   position <- Banana.accumB initialPos $ scroll <&> updateSP scrollBounds
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
-  render <- Banana.changes $ renderAll textLines <$> position <*> font
+  render <- Banana.changes $ renderAll textLines <$> position <*> font <*> drawCursor <*> click
   Banana.reactimate' render
-  liftIO (renderAll textLines initialPos initialFont)
+  liftIO (renderAll textLines initialPos initialFont initialDrawCursor initialClick)
   onceExit <- Banana.once exitKey
   Banana.reactimate $ onceExit Banana.@> font <&> \f -> do
     _ <- Toml.encodeToFile Toml.genericCodec configPath f
@@ -96,7 +106,8 @@ banana window fonts sdlHandler timerHandler = do
   where
     updateSP (SDL.V2 maxX maxY) (SDL.V2 dx dy) (SDL.V2 x y) = SDL.V2
       (clamp (0, maxX) (x + dx)) (clamp (0, maxY) (y - dy))
-    renderAll textLines (SDL.V2 colPos linePos) font = do
+    renderAll textLines (SDL.V2 colPos linePos) font drawCursor click = do
+      print (drawCursor, click)
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
