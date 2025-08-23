@@ -6,6 +6,7 @@ import Data.Foldable (for_)
 import Data.Functor ((<&>))
 import Data.Ord (clamp)
 import System.Exit (exitSuccess)
+import Control.Concurrent (forkIO, threadDelay)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Resource qualified as Resource
@@ -31,14 +32,19 @@ main = Resource.runResourceT do
     } `Resource.allocate` SDL.destroyWindow
   (_, fonts) <- TTF.newFonts `Resource.allocate` TTF.closeFonts
   liftIO do
-    (addHandler, fire) <- Banana.newAddHandler
-    network <- Banana.compile (banana window fonts addHandler)
+    (sdlHandler, fireSDL) <- Banana.newAddHandler
+    (timerHandler, fireTimer) <- Banana.newAddHandler
+    network <- Banana.compile (banana window fonts sdlHandler timerHandler)
     Banana.actuate network
-    forever (SDL.waitEvent >>= fire)
+    _ <- forkIO $ forever (threadDelay 500_000 >> fireTimer ())
+    forever (SDL.waitEvent >>= fireSDL)
 
 banana ::
-  SDL.Window -> TTF.Fonts -> Banana.AddHandler SDL.Event -> Banana.MomentIO ()
-banana window fonts handler = do
+  SDL.Window -> TTF.Fonts ->
+  Banana.AddHandler SDL.Event -> Banana.AddHandler () -> Banana.MomentIO ()
+banana window fonts sdlHandler timerHandler = do
+  timerE <- Banana.fromAddHandler timerHandler
+  Banana.reactimate $ putStrLn "cocoo" <$ timerE
   filePath <- liftIO $ Opt.execParser $ Opt.info
     (Opt.strArgument
       (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
@@ -59,7 +65,7 @@ banana window fonts handler = do
         FC.getValue "file" pattern
       pure TTF.MkFont { pointSize = 36, .. }
   SDL.initializeAll
-  sdlE <- Banana.fromAddHandler handler
+  sdlE <- Banana.fromAddHandler sdlHandler
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
           SDL.KeyboardEvent ked
