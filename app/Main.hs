@@ -109,13 +109,13 @@ banana window fonts sdlHandler timerHandler = do
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
       lineSkip <- toEnum <$> TTF.lineSkip fontCache
+      Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache 'o'
       colSkip <- do
         let pos = fromIntegral colPos
             start = case lookup (fromIntegral linePos) textLines of
               Nothing   -> ""
               Just line -> Text.take pos line
         (trueWidth, _) <- TTF.size fontCache start
-        Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache 'o'
         pure $ trueWidth + advance * max 0 (pos - Text.length start)
       SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
       for_ textLines \(i, line) -> do
@@ -128,6 +128,7 @@ banana window fonts sdlHandler timerHandler = do
             Just (SDL.P blitPos)
         else pure Nothing
       when drawCursor do
-        let rect = SDL.Rectangle (fromIntegral <$> click) (SDL.V2 2 lineSkip)
+        let rect = SDL.Rectangle (fromIntegral <$> click)
+                                 (SDL.V2 (toEnum advance `div` 5) lineSkip)
         SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
       SDL.updateWindowSurface window
