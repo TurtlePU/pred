@@ -1,12 +1,12 @@
 module Main (main) where
 
 import Control.Applicative ((<**>))
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever)
 import Data.Foldable (for_)
 import Data.Functor ((<&>))
 import Data.Ord (clamp)
 import System.Exit (exitSuccess)
-import Control.Concurrent (forkIO, threadDelay)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Resource qualified as Resource
@@ -87,18 +87,15 @@ banana window fonts sdlHandler timerHandler = do
       textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (maximum (0 : map (succ . fst) textLines))
-      initialPos = SDL.V2 0 0
-      initialDrawCursor = True
-      initialClick = SDL.P (SDL.V2 0 0)
   timerE <- Banana.fromAddHandler timerHandler
-  drawCursor <- Banana.accumB initialDrawCursor (not <$ timerE)
-  click <- Banana.stepper initialClick clicks
-  position <- Banana.accumB initialPos $ scroll <&> updateSP scrollBounds
+  drawCursor <- Banana.accumB True (not <$ timerE)
+  click <- Banana.stepper (SDL.P $ SDL.V2 0 0) clicks
+  position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
-  render <- Banana.changes $ renderAll textLines <$> position <*> font <*> drawCursor <*> click
-  Banana.reactimate' render
-  liftIO (renderAll textLines initialPos initialFont initialDrawCursor initialClick)
+  let renderer = renderAll textLines <$> position <*> font <*> drawCursor <*> click
+  Banana.changes renderer >>= Banana.reactimate'
+  Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
   Banana.reactimate $ onceExit Banana.@> font <&> \f -> do
     _ <- Toml.encodeToFile Toml.genericCodec configPath f
@@ -115,7 +112,7 @@ banana window fonts sdlHandler timerHandler = do
       colSkip <- do
         let pos = fromIntegral colPos
             start = case lookup (fromIntegral linePos) textLines of
-              Nothing -> ""
+              Nothing   -> ""
               Just line -> Text.take pos line
         (trueWidth, _) <- TTF.size fontCache start
         Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache 'o'
