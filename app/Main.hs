@@ -95,14 +95,14 @@ banana window fonts handler = do
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
       lineSkip <- toEnum <$> TTF.lineSkip fontCache
-      colSkip <- case lookup (fromIntegral linePos) textLines of
-        Nothing -> pure 0
-        Just line -> do
-          let pos = fromIntegral colPos
-              start = Text.take pos line
-          (trueWidth, _) <- TTF.size fontCache (Text.take pos line)
-          Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache 'o'
-          pure $ trueWidth + advance * max 0 (pos - Text.length start)
+      colSkip <- do
+        let pos = fromIntegral colPos
+            start = case lookup (fromIntegral linePos) textLines of
+              Nothing -> ""
+              Just line -> Text.take pos line
+        (trueWidth, _) <- TTF.size fontCache start
+        Just (_, _, _, _, advance) <- TTF.glyphMetrics fontCache 'o'
+        pure $ trueWidth + advance * max 0 (pos - Text.length start)
       SDL.V2 _ windowHeight <- SDL.surfaceDimensions windowSurface
       for_ textLines \(i, line) -> do
         let blitY = toEnum (i - linePos) * lineSkip
