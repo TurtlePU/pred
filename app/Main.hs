@@ -1,11 +1,11 @@
 module Main (main) where
 
 import Control.Applicative ((<**>))
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Monad (forever)
+import Control.Monad (forever, when)
 import Data.Foldable (for_)
 import Data.Functor ((<&>))
 import Data.Ord (clamp)
+import Data.Word (Word32)
 import System.Exit (exitSuccess)
 
 import Control.Monad.IO.Class (liftIO)
@@ -34,14 +34,15 @@ main = Resource.runResourceT do
   liftIO do
     (sdlHandler, fireSDL) <- Banana.newAddHandler
     (timerHandler, fireTimer) <- Banana.newAddHandler
-    network <- Banana.compile (banana window fonts sdlHandler timerHandler)
-    Banana.actuate network
-    _ <- forkIO $ forever (threadDelay 500_000 >> fireTimer ())
-    forever (SDL.waitEvent >>= fireSDL)
+    Banana.compile (banana window fonts sdlHandler timerHandler)
+      >>= Banana.actuate
+    forever do
+      SDL.waitEventTimeout 16 >>= maybe mempty fireSDL
+      SDL.ticks >>= fireTimer
 
 banana ::
   SDL.Window -> TTF.Fonts ->
-  Banana.AddHandler SDL.Event -> Banana.AddHandler () -> Banana.MomentIO ()
+  Banana.AddHandler SDL.Event -> Banana.AddHandler Word32 -> Banana.MomentIO ()
 banana window fonts sdlHandler timerHandler = do
   filePath <- liftIO $ Opt.execParser $ Opt.info
     (Opt.strArgument
@@ -87,8 +88,8 @@ banana window fonts sdlHandler timerHandler = do
       textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (maximum (0 : map (succ . fst) textLines))
-  timerE <- Banana.fromAddHandler timerHandler
-  drawCursor <- Banana.accumB True (not <$ timerE)
+  ticks <- Banana.fromAddHandler timerHandler
+  drawCursor <- Banana.stepper True $ (< 500) . (`mod` 1000) <$> ticks
   click <- Banana.stepper (SDL.P $ SDL.V2 0 0) clicks
   position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
   font <- Banana.accumB initialFont $ resize <&>
@@ -104,7 +105,6 @@ banana window fonts sdlHandler timerHandler = do
     updateSP (SDL.V2 maxX maxY) (SDL.V2 dx dy) (SDL.V2 x y) = SDL.V2
       (clamp (0, maxX) (x + dx)) (clamp (0, maxY) (y - dy))
     renderAll textLines (SDL.V2 colPos linePos) font drawCursor click = do
-      print (drawCursor, click)
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
@@ -127,4 +127,7 @@ banana window fonts sdlHandler timerHandler = do
           SDL.surfaceBlit lineSurface Nothing windowSurface $
             Just (SDL.P blitPos)
         else pure Nothing
+      when drawCursor do
+        let rect = SDL.Rectangle (fromIntegral <$> click) (SDL.V2 2 lineSkip)
+        SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
       SDL.updateWindowSurface window
