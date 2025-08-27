@@ -67,6 +67,7 @@ banana window fonts sdlHandler timerHandler = do
         FC.getValue "file" pattern
       pure TTF.MkFont { pointSize = 36, .. }
   sdlE <- Banana.fromAddHandler sdlHandler
+  time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
           SDL.KeyboardEvent ked
@@ -91,24 +92,20 @@ banana window fonts sdlHandler timerHandler = do
         SDL.KeycodeEquals -> Just (Right 1)
         SDL.KeycodeMinus -> Just (Right (-1))
         _ -> Nothing
-      textLines = Displayed.displayedText text
+      textLines = Displayed.displayedText text (SDL.V4 255 255 255 255)
       scrollBounds = Displayed.boundingBox textLines
-  time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
-  lastClickTime <- Banana.stepper 0 $ clicks Banana.@> time
-  let drawCursor = (\t lct -> (t - lct) `mod` 1000 < 500) <$> time <*> lastClickTime
-  position <- Banana.accumB (SDL.P $ Displayed.VPC 0 0) $ scroll <&> updateSP scrollBounds
+  viewPort <- fmap (Displayed.TextViewPort textLines) <$>
+    Banana.accumB (SDL.P $ Displayed.VPC 0 0) (scroll <&> updateSP scrollBounds)
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
-  clickPos <- Banana.mapEventIO id $
-    findClickPos textLines <$> position <*> font Banana.<@> clicks
-  click <- Banana.stepper (SDL.P $ Displayed.VPC 0 0) clickPos
+  drawCursor <- Banana.stepper 0 (clicks Banana.@> time)
+    <&> liftA2 (\t lct -> (t - lct) `mod` 1000 < 500) time
+  cursor <-
+    Banana.mapEventIO clickPos ((,,) <$> viewPort <*> font Banana.<@> clicks)
+    >>= Banana.stepper (SDL.P $ Displayed.VPC 0 0)
   mode <- Banana.stepper Normal modeE
   let renderer =
-        renderAll textLines <$> position
-                            <*> font
-                            <*> drawCursor
-                            <*> click
-                            <*> mode
+        renderAll <$> viewPort <*> font <*> drawCursor <*> cursor <*> mode
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
@@ -120,21 +117,19 @@ banana window fonts sdlHandler timerHandler = do
              (SDL.P (Displayed.VPC x y)) = SDL.P $
       clamp (0, maxX) (x + dx) `Displayed.VPC` clamp (0, maxY) (y - dy)
 
-    findClickPos sourceText position font clickPx = do
+    clickPos (viewPort, font, clickPx) = do
       fc <- TTF.load fonts font
-      Displayed.pxToViewPort Displayed.TextViewPort {..} fc clickPx
+      Displayed.pxToViewPort viewPort fc clickPx
 
-    renderAll sourceText position font drawCursor cursorPos mode = do
+    renderAll viewPort font drawCursor cursorPos mode = do
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
-      Displayed.blitVisibleText windowSurface fontCache (SDL.V4 255 255 255 255)
-        Displayed.TextViewPort {..}
+      Displayed.blitVisibleText windowSurface fontCache viewPort
       case mode of
-        Normal -> Displayed.blitSelection windowSurface fontCache
-                    (SDL.V4 255 255 255 255) Displayed.TextViewPort {..}
-                    cursorPos (SDL.V4 0 0 0 255)
+        Normal ->
+          Displayed.blitSelection windowSurface fontCache viewPort cursorPos
+            (SDL.V4 0 0 0 255)
         Edit -> when drawCursor $
-          Displayed.blitCursor windowSurface fontCache (SDL.V4 255 255 255 255)
-            Displayed.TextViewPort {..} cursorPos
+          Displayed.blitCursor windowSurface fontCache viewPort cursorPos
       SDL.updateWindowSurface window

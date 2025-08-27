@@ -24,13 +24,17 @@ import SDL qualified
 import Pred.Prelude
 import Pred.TTF qualified as TTF
 
-newtype DisplayedText = DT { lines :: [(Int, Text)] } deriving Generic
+data DisplayedText = DT
+  { source :: [(Int, Text)]
+  , color  :: TTF.Color
+  } deriving Generic
 
-displayedText :: Text -> DisplayedText
-displayedText = DT . filter (not . Text.null . snd) . zip [0..] . Text.lines
+displayedText :: Text -> TTF.Color -> DisplayedText
+displayedText text color = DT {..}
+  where source = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
 
 (!) :: DisplayedText -> Int -> Text
-DT dt ! i = fromMaybe "" (lookup i dt)
+DT dt _ ! i = fromMaybe "" (lookup i dt)
 
 -- | 'VPC' is short for "viewport coordinates".
 data VPC a = VPC
@@ -40,11 +44,11 @@ data VPC a = VPC
   deriving (Functor, Generic)
 
 boundingBox :: DisplayedText -> VPC Int
-boundingBox (DT dt) =
+boundingBox (DT dt _) =
   maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) dt
 
 (!?) :: DisplayedText -> SDL.Point VPC Int -> Maybe Char
-DT dt !? SDL.P vpc = lookup vpc.line dt >>= safeIndex vpc.column
+DT dt _ !? SDL.P vpc = lookup vpc.line dt >>= safeIndex vpc.column
   where
     safeIndex :: Int -> Text.Text -> Maybe Char
     safeIndex i t
@@ -58,8 +62,8 @@ data TextViewPort = TextViewPort
   deriving Generic
 
 blitVisibleText ::
-  MonadIO m => SDL.Surface -> TTF.FontCache -> TTF.Color -> TextViewPort -> m ()
-blitVisibleText surface fc color tvp = do
+  MonadIO m => SDL.Surface -> TTF.FontCache -> TextViewPort -> m ()
+blitVisibleText surface fc tvp = do
   let SDL.P vec = tvp.position
   lineSkip <- toEnum <$> TTF.lineSkip fc
   colSkip <- do
@@ -69,19 +73,19 @@ blitVisibleText surface fc color tvp = do
     charWidth <- advance fc 'o'
     pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
   SDL.V2 _ surfaceHeight <- SDL.surfaceDimensions surface
-  for_ tvp.sourceText.lines \(i, line) -> do
+  for_ tvp.sourceText.source \(i, line) -> do
     let blitY = toEnum (i - vec.line) * lineSkip
         blitPos = SDL.V2 (-toEnum colSkip) blitY
     if 0 <= blitY && blitY < surfaceHeight
     then do
-      lineSurface <- TTF.solid fc color line
+      lineSurface <- TTF.solid fc tvp.sourceText.color line
       SDL.surfaceBlit lineSurface Nothing surface $ Just (SDL.P blitPos)
     else pure Nothing
 
 blitSelection ::
-  MonadIO m => SDL.Surface -> TTF.FontCache -> TTF.Color -> TextViewPort ->
+  MonadIO m => SDL.Surface -> TTF.FontCache -> TextViewPort ->
   SDL.Point VPC Int -> TTF.Color -> m ()
-blitSelection surface fc selectionColor tvp selectionPos charColor = do
+blitSelection surface fc tvp selectionPos charColor = do
   cPX <- viewPortToPx tvp fc selectionPos
   bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
   when (cPX `inBounds` bounds) do
@@ -89,15 +93,15 @@ blitSelection surface fc selectionColor tvp selectionPos charColor = do
     charWidth <- advance fc char
     lineSkip <- TTF.lineSkip fc
     let rect = toEnum <$> SDL.Rectangle cPX (charWidth `SDL.V2` lineSkip)
-    SDL.surfaceFillRect surface (Just rect) selectionColor
+    SDL.surfaceFillRect surface (Just rect) tvp.sourceText.color
     charSurface <- TTF.solid fc charColor (Text.singleton char)
     _ <- SDL.surfaceBlit charSurface Nothing surface $ Just $ toEnum <$> cPX
     pure ()
 
 blitCursor ::
-  MonadIO m => SDL.Surface -> TTF.FontCache -> TTF.Color -> TextViewPort ->
-  SDL.Point VPC Int -> m ()
-blitCursor surface fc color tvp cursorPos = do
+  MonadIO m =>
+  SDL.Surface -> TTF.FontCache -> TextViewPort -> SDL.Point VPC Int -> m ()
+blitCursor surface fc tvp cursorPos = do
   cPX <- viewPortToPx tvp fc cursorPos
   bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
   when (cPX `inBounds` bounds) do
@@ -106,7 +110,7 @@ blitCursor surface fc color tvp cursorPos = do
     lineSkip <- TTF.lineSkip fc
     let rect = toEnum <$>
           SDL.Rectangle cPX (SDL.V2 (charWidth `div` 5) lineSkip)
-    SDL.surfaceFillRect surface (Just rect) color
+    SDL.surfaceFillRect surface (Just rect) tvp.sourceText.color
 
 advance :: MonadIO m => TTF.FontCache -> Char -> m Int
 advance fc char = liftIO do
