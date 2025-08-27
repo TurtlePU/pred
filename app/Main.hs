@@ -89,8 +89,9 @@ banana window fonts sdlHandler timerHandler = do
       textLines = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
       scrollBounds = SDL.V2 (maximum (0 : map (Text.length . snd) textLines))
                             (maximum (0 : map (succ . fst) textLines))
-  ticks <- Banana.fromAddHandler timerHandler
-  drawCursor <- Banana.stepper True $ (< 500) . (`mod` 1000) <$> ticks
+  time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
+  lastClickTime <- Banana.stepper 0 $ clicks Banana.@> time
+  let drawCursor = (\t lct -> (t - lct) `mod` 1000 < 500) <$> time <*> lastClickTime
   position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
@@ -112,9 +113,10 @@ banana window fonts sdlHandler timerHandler = do
       lineSkip <- TTF.lineSkip fc
       let lineCPos = linePos + cy `div` lineSkip
           line = fromMaybe "" $ lineCPos `lookup` tLines
-      colCPos <- binarySearch (colPos, Text.length line) \i -> do
-        (width, _) <- TTF.size fc $ Text.drop colPos $ Text.take (i + 1) line
-        pure $ width >= cx
+      colCPos <- binarySearch (-1, Text.length line) \i -> do
+        (widthL, _) <- TTF.size fc $ Text.drop colPos $ Text.take (max 0 i) line
+        (widthR, _) <- TTF.size fc $ Text.drop colPos $ Text.take (i + 1) line
+        pure $ (widthL + widthR) `div` 2 > cx
       pure $ SDL.V2 colCPos lineCPos
     renderAll textLines (SDL.V2 colPos linePos) font drawCursor
                         (SDL.V2 colCPos lineCPos) = do
