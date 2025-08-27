@@ -24,6 +24,8 @@ import Pred.Prelude
 import Pred.TTF qualified as TTF
 import Data.Maybe (fromMaybe)
 
+data Mode = Normal | Edit
+
 main :: IO ()
 main = Resource.runResourceT do
   SDL.initializeAll
@@ -81,6 +83,10 @@ banana window fonts sdlHandler timerHandler = do
               && mbed.mouseButtonEventWindow == Just window ->
                 Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
+      modeE = Banana.filterJust $ press <&> \case
+        SDL.KeycodeEscape -> Just Normal
+        SDL.KeycodeReturn -> Just Edit
+        _ -> Nothing
       (exitKey, resize) = Banana.split $ Banana.filterJust $ press <&> \case
         SDL.KeycodeQ -> Just (Left ())
         SDL.KeycodeEquals -> Just (Right 1)
@@ -98,7 +104,13 @@ banana window fonts sdlHandler timerHandler = do
   clickPos <- Banana.mapEventIO id $
     findClickPos textLines <$> position <*> font Banana.<@> clicks
   click <- Banana.stepper (SDL.V2 0 0) clickPos
-  let renderer = renderAll textLines <$> position <*> font <*> drawCursor <*> click
+  mode <- Banana.stepper Normal modeE
+  let renderer =
+        renderAll textLines <$> position
+                            <*> font
+                            <*> drawCursor
+                            <*> click
+                            <*> mode
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
@@ -119,7 +131,7 @@ banana window fonts sdlHandler timerHandler = do
         pure $ (widthL + widthR) `div` 2 > cx
       pure $ SDL.V2 colCPos lineCPos
     renderAll textLines (SDL.V2 colPos linePos) font drawCursor
-                        (SDL.V2 colCPos lineCPos) = do
+                        (SDL.V2 colCPos lineCPos) mode = do
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
@@ -143,15 +155,29 @@ banana window fonts sdlHandler timerHandler = do
             Just (SDL.P blitPos)
         else pure Nothing
       let clickY = fromIntegral (lineCPos - linePos) * lineSkip
-      when (drawCursor && clickY >= 0 && colCPos >= colPos) do
+      when (clickY >= 0 && colCPos >= colPos) do
         (clickX, _) <- TTF.size fontCache
                         $ Text.drop colPos
                         $ Text.take colCPos
                         $ fromMaybe ""
                         $ lookup lineCPos textLines
-        let rect = SDL.Rectangle (SDL.P $ fromIntegral clickX `SDL.V2` clickY)
-                                 (SDL.V2 (toEnum advance `div` 5) lineSkip)
-        SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
+        let rectPos = SDL.P $ fromIntegral clickX `SDL.V2` clickY
+        case mode of
+          Normal -> do
+            let char = fromMaybe ' ' $
+                  lookup lineCPos textLines >>= safeIndex colCPos
+            Just (_, _, _, _, rectWidth) <- TTF.glyphMetrics fontCache char
+            let rect = SDL.Rectangle rectPos
+                  (toEnum rectWidth `SDL.V2` lineSkip)
+            SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
+            charSurface <- TTF.solid fontCache (SDL.V4 0 0 0 255)
+                                               (Text.singleton char)
+            _ <- SDL.surfaceBlit charSurface Nothing windowSurface $ Just rectPos
+            pure ()
+          Edit -> when drawCursor do
+            let rect = SDL.Rectangle rectPos
+                  (SDL.V2 (toEnum advance `div` 5) lineSkip)
+            SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
       SDL.updateWindowSurface window
 
 binarySearch :: (Integral a, Monad m) => (a, a) -> (a -> m Bool) -> m a
@@ -164,3 +190,8 @@ binarySearch (start, end) test = go start end
          test mid >>= \case
            True -> go lo mid
            False -> go mid hi
+
+safeIndex :: Int -> Text.Text -> Maybe Char
+safeIndex i t
+  | i < Text.length t = Just $ Text.index t i
+  | otherwise = Nothing
