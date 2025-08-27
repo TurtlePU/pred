@@ -22,9 +22,11 @@ import Toml qualified
 
 import Pred.Prelude
 import Pred.TTF qualified as TTF
+import Data.Maybe (fromMaybe)
 
 main :: IO ()
 main = Resource.runResourceT do
+  SDL.initializeAll
   (_, window) <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
     { windowHighDPI = True
     , windowMode = SDL.Maximized
@@ -63,7 +65,6 @@ banana window fonts sdlHandler timerHandler = do
       path <- maybe (error "lol no filepath") (pure . Text.pack) $
         FC.getValue "file" pattern
       pure TTF.MkFont { pointSize = 36, .. }
-  SDL.initializeAll
   sdlE <- Banana.fromAddHandler sdlHandler
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
@@ -78,7 +79,7 @@ banana window fonts sdlHandler timerHandler = do
           SDL.MouseButtonEvent mbed
             | mbed.mouseButtonEventMotion == SDL.Pressed
               && mbed.mouseButtonEventWindow == Just window ->
-                Just mbed.mouseButtonEventPos
+                Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
       (exitKey, resize) = Banana.split $ Banana.filterJust $ press <&> \case
         SDL.KeycodeQ -> Just (Left ())
@@ -90,10 +91,12 @@ banana window fonts sdlHandler timerHandler = do
                             (maximum (0 : map (succ . fst) textLines))
   ticks <- Banana.fromAddHandler timerHandler
   drawCursor <- Banana.stepper True $ (< 500) . (`mod` 1000) <$> ticks
-  click <- Banana.stepper (SDL.P $ SDL.V2 0 0) clicks
   position <- Banana.accumB (SDL.V2 0 0) $ scroll <&> updateSP scrollBounds
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
+  clickPos <- Banana.mapEventIO id $
+    findClickPos textLines <$> position <*> font Banana.<@> clicks
+  click <- Banana.stepper (SDL.V2 0 0) clickPos
   let renderer = renderAll textLines <$> position <*> font <*> drawCursor <*> click
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
@@ -104,7 +107,17 @@ banana window fonts sdlHandler timerHandler = do
   where
     updateSP (SDL.V2 maxX maxY) (SDL.V2 dx dy) (SDL.V2 x y) = SDL.V2
       (clamp (0, maxX) (x + dx)) (clamp (0, maxY) (y - dy))
-    renderAll textLines (SDL.V2 colPos linePos) font drawCursor click = do
+    findClickPos tLines (SDL.V2 colPos linePos) font (SDL.P (SDL.V2 cx cy)) = do
+      fc <- TTF.load fonts font
+      lineSkip <- TTF.lineSkip fc
+      let lineCPos = linePos + cy `div` lineSkip
+          line = fromMaybe "" $ lineCPos `lookup` tLines
+      colCPos <- binarySearch (colPos, Text.length line) \i -> do
+        (width, _) <- TTF.size fc $ Text.drop colPos $ Text.take (i + 1) line
+        pure $ width >= cx
+      pure $ SDL.V2 colCPos lineCPos
+    renderAll textLines (SDL.V2 colPos linePos) font drawCursor
+                        (SDL.V2 colCPos lineCPos) = do
       windowSurface <- SDL.getWindowSurface window
       SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
       fontCache <- TTF.load fonts font
@@ -127,8 +140,25 @@ banana window fonts sdlHandler timerHandler = do
           SDL.surfaceBlit lineSurface Nothing windowSurface $
             Just (SDL.P blitPos)
         else pure Nothing
-      when drawCursor do
-        let rect = SDL.Rectangle (fromIntegral <$> click)
+      let clickY = fromIntegral (lineCPos - linePos) * lineSkip
+      when (drawCursor && clickY >= 0 && colCPos >= colPos) do
+        (clickX, _) <- TTF.size fontCache
+                        $ Text.drop colPos
+                        $ Text.take colCPos
+                        $ fromMaybe ""
+                        $ lookup lineCPos textLines
+        let rect = SDL.Rectangle (SDL.P $ fromIntegral clickX `SDL.V2` clickY)
                                  (SDL.V2 (toEnum advance `div` 5) lineSkip)
         SDL.surfaceFillRect windowSurface (Just rect) (SDL.V4 255 255 255 255)
       SDL.updateWindowSurface window
+
+binarySearch :: (Integral a, Monad m) => (a, a) -> (a -> m Bool) -> m a
+binarySearch (start, end) test = go start end
+  where
+    go lo hi
+      | succ lo >= hi = pure hi
+      | otherwise = do
+         let mid = lo + (hi - lo) `div` 2
+         test mid >>= \case
+           True -> go lo mid
+           False -> go mid hi
