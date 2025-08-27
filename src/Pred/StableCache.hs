@@ -8,6 +8,7 @@ import qualified System.Mem.StableName as StableName
 import System.Mem.Weak (Weak)
 import qualified System.Mem.Weak as Weak
 
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.HashMap.Lazy (HashMap)
 import Data.HashMap.Lazy qualified as HashMap
 
@@ -21,8 +22,8 @@ newStableCache = SC <$> IORef.newIORef HashMap.empty
 closeCache :: StableCache k v -> IO ()
 closeCache (SC sc) = IORef.readIORef sc >>= traverse_ Weak.finalize
 
-request :: StableCache k v -> k -> IO (v, IO ()) -> IO v
-request (SC sc) key gen = do
+request :: MonadIO m => StableCache k v -> k -> IO (v, IO ()) -> m v
+request (SC sc) key gen = liftIO do
   name <- StableName.makeStableName key
   IORef.readIORef sc
     >>= maybe (pure Nothing) Weak.deRefWeak . HashMap.lookup name

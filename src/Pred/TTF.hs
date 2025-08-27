@@ -8,9 +8,11 @@ module Pred.TTF
   , glyphMetrics
   , lineSkip
   , size
+  , Color
   , solid
   ) where
 
+import Control.Monad.IO.Class (MonadIO)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import SDL qualified
@@ -29,7 +31,7 @@ closeFonts :: Fonts -> IO ()
 closeFonts fonts = closeCache fonts.cache >> TTF.quit
 
 data Font = MkFont
-  { path :: Text
+  { path      :: Text
   , pointSize :: TTF.PointSize
   }
   deriving (Generic, Eq, Show)
@@ -41,7 +43,7 @@ load fonts font = request fonts.cache font do
 
 data FontCache = MkFontCache
   { font     :: TTF.Font
-  , surfaces :: StableCache TTF.Color (StableCache Text SDL.Surface)
+  , surfaces :: StableCache Color (StableCache Text SDL.Surface)
   }
   deriving Generic
 
@@ -53,16 +55,19 @@ newFontCache MkFont {..} = MkFontCache
 closeFontCache :: FontCache -> IO ()
 closeFontCache fc = closeCache fc.surfaces >> TTF.free fc.font
 
-glyphMetrics :: FontCache -> Char -> IO (Maybe (Int, Int, Int, Int, Int))
+glyphMetrics ::
+  MonadIO m => FontCache -> Char -> m (Maybe (Int, Int, Int, Int, Int))
 glyphMetrics fc = TTF.glyphMetrics fc.font
 
-lineSkip :: FontCache -> IO Int
+lineSkip :: MonadIO m => FontCache -> m Int
 lineSkip fc = TTF.lineSkip fc.font
 
-size :: FontCache -> Text -> IO (Int, Int)
+size :: MonadIO m => FontCache -> Text -> m (Int, Int)
 size fc = TTF.size fc.font
 
-solid :: FontCache -> TTF.Color -> Text -> IO SDL.Surface
+type Color = TTF.Color
+
+solid :: MonadIO m => FontCache -> Color -> Text -> m SDL.Surface
 solid fc color text = do
   perColor <- request fc.surfaces color do
     cache <- newStableCache
