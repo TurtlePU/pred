@@ -1,6 +1,6 @@
 module Pred.RichText
-  ( RichText
-  , richText
+  ( SourceText
+  , sourceText
   , VPC (..)
   , boundingBox
   , (!?)
@@ -24,93 +24,91 @@ import SDL qualified
 import Pred.Prelude
 import Pred.TTF qualified as TTF
 
-data RichText = RT
-  { source :: [(Int, Text)]
-  , color  :: TTF.Color
-  } deriving Generic
+newtype SourceText = ST { stLines :: [(Int, Text)] } deriving Generic
 
-richText :: Text -> TTF.Color -> RichText
-richText text color = RT {..}
-  where source = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
+sourceText :: Text -> SourceText
+sourceText = ST . filter (not . Text.null . snd) . zip [0..] . Text.lines
 
-(!) :: RichText -> Int -> Text
-rt ! i = fromMaybe "" (lookup i rt.source)
+(!) :: SourceText -> Int -> Text
+ST st ! i = fromMaybe "" (lookup i st)
 
 -- | 'VPC' is short for "viewport coordinates".
-data VPC a = VPC
-  { column :: a
-  , line   :: a
-  }
-  deriving (Functor, Generic)
+data VPC a = VPC { column :: a, line :: a } deriving (Functor, Generic)
 
-boundingBox :: RichText -> VPC Int
-boundingBox rt =
-  maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) rt.source
+boundingBox :: SourceText -> VPC Int
+boundingBox (ST st) =
+  maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) st
 
-(!?) :: RichText -> SDL.Point VPC Int -> Maybe Char
-rt !? SDL.P vpc = lookup vpc.line rt.source >>= safeIndex vpc.column
+(!?) :: SourceText -> SDL.Point VPC Int -> Maybe Char
+ST st !? SDL.P vpc = lookup vpc.line st >>= safeIndex vpc.column
   where
-    safeIndex :: Int -> Text.Text -> Maybe Char
+    safeIndex :: Int -> Text -> Maybe Char
     safeIndex i t
       | i < Text.length t = Just $ Text.index t i
       | otherwise = Nothing
 
 data TextViewPort = TextViewPort
-  { sourceText :: RichText
-  , position   :: SDL.Point VPC Int
-  }
-  deriving Generic
+  { source    :: SourceText
+  , font      :: TTF.Font
+  , bgColor   :: TTF.Color
+  , textColor :: TTF.Color
+  , position  :: SDL.Point VPC Int
+  } deriving Generic
 
 blitVisibleText ::
-  MonadIO m => SDL.Surface -> TTF.FontCache -> TextViewPort -> m ()
-blitVisibleText surface fc tvp = do
+  MonadIO m => SDL.Surface -> TTF.Fonts -> TextViewPort -> m ()
+blitVisibleText surface fonts tvp = do
+  SDL.surfaceFillRect surface Nothing tvp.bgColor
   let SDL.P vec = tvp.position
+  fc <- TTF.load fonts tvp.font
   lineSkip <- toEnum <$> TTF.lineSkip fc
   colSkip <- do
     let pos = fromIntegral vec.column
-        start = Text.take pos $ tvp.sourceText ! vec.line
+        start = Text.take pos $ tvp.source ! vec.line
     (trueWidth, _) <- TTF.size fc start
     charWidth <- advance fc 'o'
     pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
   SDL.V2 _ surfaceHeight <- SDL.surfaceDimensions surface
-  for_ tvp.sourceText.source \(i, line) -> do
+  for_ tvp.source.stLines \(i, line) -> do
     let blitY = toEnum (i - vec.line) * lineSkip
         blitPos = SDL.V2 (-toEnum colSkip) blitY
     if 0 <= blitY && blitY < surfaceHeight
     then do
-      lineSurface <- TTF.solid fc tvp.sourceText.color line
+      lineSurface <- TTF.solid fc tvp.textColor line
       SDL.surfaceBlit lineSurface Nothing surface $ Just (SDL.P blitPos)
     else pure Nothing
 
 blitSelection ::
-  MonadIO m => SDL.Surface -> TTF.FontCache -> TextViewPort ->
-  SDL.Point VPC Int -> TTF.Color -> m ()
-blitSelection surface fc tvp selectionPos charColor = do
-  cPX <- viewPortToPx tvp fc selectionPos
+  MonadIO m =>
+  SDL.Surface -> TTF.Fonts -> TextViewPort -> SDL.Point VPC Int -> m ()
+blitSelection surface fonts tvp selectionPos = do
+  cPX <- viewPortToPx tvp fonts selectionPos
   bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
   when (cPX `inBounds` bounds) do
-    let char = fromMaybe ' ' $ tvp.sourceText !? selectionPos
+    let char = fromMaybe ' ' $ tvp.source !? selectionPos
+    fc <- TTF.load fonts tvp.font
     charWidth <- advance fc char
     lineSkip <- TTF.lineSkip fc
     let rect = toEnum <$> SDL.Rectangle cPX (charWidth `SDL.V2` lineSkip)
-    SDL.surfaceFillRect surface (Just rect) tvp.sourceText.color
-    charSurface <- TTF.solid fc charColor (Text.singleton char)
+    SDL.surfaceFillRect surface (Just rect) tvp.textColor
+    charSurface <- TTF.solid fc tvp.bgColor (Text.singleton char)
     _ <- SDL.surfaceBlit charSurface Nothing surface $ Just $ toEnum <$> cPX
     pure ()
 
 blitCursor ::
   MonadIO m =>
-  SDL.Surface -> TTF.FontCache -> TextViewPort -> SDL.Point VPC Int -> m ()
-blitCursor surface fc tvp cursorPos = do
-  cPX <- viewPortToPx tvp fc cursorPos
+  SDL.Surface -> TTF.Fonts -> TextViewPort -> SDL.Point VPC Int -> m ()
+blitCursor surface fonts tvp cursorPos = do
+  cPX <- viewPortToPx tvp fonts cursorPos
   bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
   when (cPX `inBounds` bounds) do
-    let char = fromMaybe ' ' $ tvp.sourceText !? cursorPos
+    let char = fromMaybe ' ' $ tvp.source !? cursorPos
+    fc <- TTF.load fonts tvp.font
     charWidth <- advance fc char
     lineSkip <- TTF.lineSkip fc
     let rect = toEnum <$>
           SDL.Rectangle cPX (SDL.V2 (charWidth `div` 5) lineSkip)
-    SDL.surfaceFillRect surface (Just rect) tvp.sourceText.color
+    SDL.surfaceFillRect surface (Just rect) tvp.textColor
 
 advance :: MonadIO m => TTF.FontCache -> Char -> m Int
 advance fc char = liftIO do
@@ -125,23 +123,25 @@ inBounds (SDL.P v) b = all (uncurry inBound) $ liftA2 (,) v b
 
 viewPortToPx ::
   MonadIO m =>
-  TextViewPort -> TTF.FontCache -> SDL.Point VPC Int -> m (SDL.Point SDL.V2 Int)
-viewPortToPx tvp fc (SDL.P vpc) = do
+  TextViewPort -> TTF.Fonts -> SDL.Point VPC Int -> m (SDL.Point SDL.V2 Int)
+viewPortToPx tvp fonts (SDL.P vpc) = do
   let SDL.P pos = tvp.position
-      lineText = tvp.sourceText ! vpc.line
+      lineText = tvp.source ! vpc.line
+  fc <- TTF.load fonts tvp.font
   (columnPx, _) <- TTF.size fc $ Text.drop pos.column
                                $ Text.take vpc.column lineText
   lineSkip <- TTF.lineSkip fc
   pure $ SDL.P $ columnPx `SDL.V2` ((vpc.line - pos.line) * lineSkip)
 
 pxToViewPort ::
-  TextViewPort -> TTF.FontCache -> SDL.Point SDL.V2 Int ->
-  IO (SDL.Point VPC Int)
-pxToViewPort tvp fc (SDL.P (SDL.V2 x y)) = do
+  MonadIO m =>
+  TextViewPort -> TTF.Fonts -> SDL.Point SDL.V2 Int -> m (SDL.Point VPC Int)
+pxToViewPort tvp fonts (SDL.P (SDL.V2 x y)) = do
+  fc <- TTF.load fonts tvp.font
   lineSkip <- TTF.lineSkip fc
   let SDL.P pos = tvp.position
       line = pos.line + y `div` lineSkip
-      lineText = tvp.sourceText ! line
+      lineText = tvp.source ! line
   column <- binarySearch (-1, Text.length lineText) \i -> do
     (wl, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (max 0 i) lineText
     (wr, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (i + 1) lineText

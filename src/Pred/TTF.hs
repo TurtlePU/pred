@@ -36,7 +36,7 @@ data Font = MkFont
   }
   deriving (Generic, Eq, Show)
 
-load :: Fonts -> Font -> IO FontCache
+load :: MonadIO m => Fonts -> Font -> m FontCache
 load fonts font = request fonts.cache font do
   fontCache <- newFontCache font
   pure (fontCache, closeFontCache fontCache)

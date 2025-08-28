@@ -92,20 +92,23 @@ banana window fonts sdlHandler timerHandler = do
         SDL.KeycodeEquals -> Just (Right 1)
         SDL.KeycodeMinus -> Just (Right (-1))
         _ -> Nothing
-      textLines = Rich.richText text (SDL.V4 255 255 255 255)
-      scrollBounds = Rich.boundingBox textLines
-  viewPort <- fmap (Rich.TextViewPort textLines) <$>
-    Banana.accumB (SDL.P $ Rich.VPC 0 0) (scroll <&> updateSP scrollBounds)
+      source = Rich.sourceText text
+      scrollBounds = Rich.boundingBox source
+      makeViewPort font position = Rich.TextViewPort
+        { bgColor = SDL.V4 0 0 0 255
+        , textColor = SDL.V4 255 255 255 255
+        , .. }
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
+  scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
+    scroll <&> updateSP scrollBounds
+  let viewPort = makeViewPort <$> font <*> scrollPos
   drawCursor <- Banana.stepper 0 (clicks Banana.@> time)
     <&> liftA2 (\t lct -> (t - lct) `mod` 1000 < 500) time
-  cursor <-
-    Banana.mapEventIO clickPos ((,,) <$> viewPort <*> font Banana.<@> clicks)
-    >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
+  cursor <- Banana.mapEventIO clickPos ((,) <$> viewPort Banana.<@> clicks)
+            >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
   mode <- Banana.stepper Normal modeE
-  let renderer =
-        renderAll <$> viewPort <*> font <*> drawCursor <*> cursor <*> mode
+  let renderer = renderAll <$> viewPort <*> drawCursor <*> cursor <*> mode
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
@@ -117,19 +120,14 @@ banana window fonts sdlHandler timerHandler = do
              (SDL.P (Rich.VPC x y)) = SDL.P $
       clamp (0, maxX) (x + dx) `Rich.VPC` clamp (0, maxY) (y - dy)
 
-    clickPos (viewPort, font, clickPx) = do
-      fc <- TTF.load fonts font
-      Rich.pxToViewPort viewPort fc clickPx
+    clickPos (viewPort, clickPx) = Rich.pxToViewPort viewPort fonts clickPx
 
-    renderAll viewPort font drawCursor cursorPos mode = do
+    renderAll viewPort drawCursor cursorPos mode = do
       windowSurface <- SDL.getWindowSurface window
-      SDL.surfaceFillRect windowSurface Nothing (SDL.V4 0 0 0 255)
-      fontCache <- TTF.load fonts font
-      Rich.blitVisibleText windowSurface fontCache viewPort
+      Rich.blitVisibleText windowSurface fonts viewPort
       case mode of
         Normal ->
-          Rich.blitSelection windowSurface fontCache viewPort cursorPos
-            (SDL.V4 0 0 0 255)
+          Rich.blitSelection windowSurface fonts viewPort cursorPos
         Edit -> when drawCursor $
-          Rich.blitCursor windowSurface fontCache viewPort cursorPos
+          Rich.blitCursor windowSurface fonts viewPort cursorPos
       SDL.updateWindowSurface window
