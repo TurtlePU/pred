@@ -1,6 +1,6 @@
-module Pred.DisplayedText
-  ( DisplayedText
-  , displayedText
+module Pred.RichText
+  ( RichText
+  , richText
   , VPC (..)
   , boundingBox
   , (!?)
@@ -24,17 +24,17 @@ import SDL qualified
 import Pred.Prelude
 import Pred.TTF qualified as TTF
 
-data DisplayedText = DT
+data RichText = RT
   { source :: [(Int, Text)]
   , color  :: TTF.Color
   } deriving Generic
 
-displayedText :: Text -> TTF.Color -> DisplayedText
-displayedText text color = DT {..}
+richText :: Text -> TTF.Color -> RichText
+richText text color = RT {..}
   where source = filter (not . Text.null . snd) $ zip [0..] (Text.lines text)
 
-(!) :: DisplayedText -> Int -> Text
-DT dt _ ! i = fromMaybe "" (lookup i dt)
+(!) :: RichText -> Int -> Text
+rt ! i = fromMaybe "" (lookup i rt.source)
 
 -- | 'VPC' is short for "viewport coordinates".
 data VPC a = VPC
@@ -43,12 +43,12 @@ data VPC a = VPC
   }
   deriving (Functor, Generic)
 
-boundingBox :: DisplayedText -> VPC Int
-boundingBox (DT dt _) =
-  maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) dt
+boundingBox :: RichText -> VPC Int
+boundingBox rt =
+  maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) rt.source
 
-(!?) :: DisplayedText -> SDL.Point VPC Int -> Maybe Char
-DT dt _ !? SDL.P vpc = lookup vpc.line dt >>= safeIndex vpc.column
+(!?) :: RichText -> SDL.Point VPC Int -> Maybe Char
+rt !? SDL.P vpc = lookup vpc.line rt.source >>= safeIndex vpc.column
   where
     safeIndex :: Int -> Text.Text -> Maybe Char
     safeIndex i t
@@ -56,7 +56,7 @@ DT dt _ !? SDL.P vpc = lookup vpc.line dt >>= safeIndex vpc.column
       | otherwise = Nothing
 
 data TextViewPort = TextViewPort
-  { sourceText :: DisplayedText
+  { sourceText :: RichText
   , position   :: SDL.Point VPC Int
   }
   deriving Generic

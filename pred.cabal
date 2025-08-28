@@ -49,8 +49,8 @@ library
     import:          stanzas
     hs-source-dirs:  src
     exposed-modules:
-        Pred.DisplayedText,
         Pred.Prelude,
+        Pred.RichText,
         Pred.StableCache,
         Pred.TTF,
     build-depends:
