@@ -1,9 +1,10 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE RecursiveDo #-}
 
 module Main (main) where
 
 import Control.Applicative ((<**>))
-import Control.Monad (forever)
+import Control.Monad (forever, join)
 import Control.Monad.Fix (mfix)
 import Data.Foldable (traverse_)
 import Data.Functor ((<&>))
@@ -97,38 +98,41 @@ banana window fonts sdlHandler timerHandler = do
         , (Exit, SDL.KeycodeQ)
         ]
       source = Rich.sourceText text
-      makeViewPort font position drawCursor mode cursorPos =
-        let (selection, cursors) = case mode of
-              Edit -> ([], [cursorPos | drawCursor])
-              Normal -> ([cursorPos], [])
-         in Rich.TextViewPort
-            { bgColor = SDL.V4 0 0 0 255
-            , textColor = SDL.V4 255 255 255 255
-            , .. }
   actions <- collect $ press <&> \kc -> [ ac | (ac, k) <- actionMap, k == kc ]
-  let modeE = Banana.filterJust $ actions <&> \case
-        Enter mode -> Just mode
-        _ -> Nothing
-      (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
+  let (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
         Exit -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
-  font <- Banana.accumB initialFont $ resize <&>
+  fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
     scroll <&> \(SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
       let Rich.VPC maxX maxY = Rich.boundingBox source
        in SDL.P $ clamp (0, maxX) (x + dx) `Rich.VPC` clamp (0, maxY) (y - dy)
-  drawCursor <- Banana.stepper 0 (clicks Banana.@> time)
+  drawCursorB <- Banana.stepper 0 (clicks Banana.@> time)
     <&> liftA2 (\t lct -> (t - lct) `mod` 1000 < 500) time
-  mode <- Banana.stepper Normal modeE
-  let viewPort0 = makeViewPort <$> font <*> scrollPos <*> drawCursor <*> mode
+  modeB <- Banana.stepper Normal $ Banana.filterJust $ actions <&> \case
+    Enter mode -> Just mode
+    _ -> Nothing
+  let sc = do
+        drawCursor <- drawCursorB
+        mode <- modeB
+        pure case mode of
+          Edit -> \cursorPos -> ([], [cursorPos | drawCursor])
+          Normal -> \cursorPos -> ([cursorPos], [])
   viewPort <- mdo
-    cursorPos <- Banana.mapEventIO
+    cursorPosB <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
       ((,) <$> vport Banana.<@> clicks)
       >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
-    let vport = viewPort0 <*> cursorPos
+    let vport = do
+          font <- fontB
+          position <- scrollPos
+          (selection, cursors) <- sc <*> cursorPosB
+          pure Rich.TextViewPort
+                { bgColor = SDL.V4 0 0 0 255
+                , textColor = SDL.V4 255 255 255 255
+                , .. }
     pure vport
   let renderer = viewPort <&> \tvp -> do
         windowSurface <- SDL.getWindowSurface window
@@ -137,7 +141,7 @@ banana window fonts sdlHandler timerHandler = do
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
-  Banana.reactimate $ onceExit Banana.@> font <&> \f -> do
+  Banana.reactimate $ onceExit Banana.@> fontB <&> \f -> do
     _ <- Toml.encodeToFile Toml.genericCodec configPath f
     exitSuccess
 
