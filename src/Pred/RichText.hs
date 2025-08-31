@@ -3,18 +3,15 @@ module Pred.RichText
   , sourceText
   , VPC (..)
   , boundingBox
-  , (!?)
   , TextViewPort (..)
-  , blitVisibleText
-  , blitSelection
-  , blitCursor
-  , viewPortToPx
   , pxToViewPort
+  , blitTextViewPort
   ) where
 
 import Control.Monad (when)
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
+import Foreign.C (CInt)
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Text (Text)
@@ -53,85 +50,9 @@ data TextViewPort = TextViewPort
   , bgColor   :: TTF.Color
   , textColor :: TTF.Color
   , position  :: SDL.Point VPC Int
+  , selection :: [SDL.Point VPC Int]
+  , cursors   :: [SDL.Point VPC Int]
   } deriving Generic
-
-blitVisibleText ::
-  MonadIO m => SDL.Surface -> TTF.Fonts -> TextViewPort -> m ()
-blitVisibleText surface fonts tvp = do
-  SDL.surfaceFillRect surface Nothing tvp.bgColor
-  let SDL.P vec = tvp.position
-  fc <- TTF.load fonts tvp.font
-  lineSkip <- toEnum <$> TTF.lineSkip fc
-  colSkip <- do
-    let pos = fromIntegral vec.column
-        start = Text.take pos $ tvp.source ! vec.line
-    (trueWidth, _) <- TTF.size fc start
-    charWidth <- advance fc 'o'
-    pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
-  SDL.V2 _ surfaceHeight <- SDL.surfaceDimensions surface
-  for_ tvp.source.stLines \(i, line) -> do
-    let blitY = toEnum (i - vec.line) * lineSkip
-        blitPos = SDL.V2 (-toEnum colSkip) blitY
-    if 0 <= blitY && blitY < surfaceHeight
-    then do
-      lineSurface <- TTF.solid fc tvp.textColor line
-      SDL.surfaceBlit lineSurface Nothing surface $ Just (SDL.P blitPos)
-    else pure Nothing
-
-blitSelection ::
-  MonadIO m =>
-  SDL.Surface -> TTF.Fonts -> TextViewPort -> SDL.Point VPC Int -> m ()
-blitSelection surface fonts tvp selectionPos = do
-  cPX <- viewPortToPx tvp fonts selectionPos
-  bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
-  when (cPX `inBounds` bounds) do
-    let char = fromMaybe ' ' $ tvp.source !? selectionPos
-    fc <- TTF.load fonts tvp.font
-    charWidth <- advance fc char
-    lineSkip <- TTF.lineSkip fc
-    let rect = toEnum <$> SDL.Rectangle cPX (charWidth `SDL.V2` lineSkip)
-    SDL.surfaceFillRect surface (Just rect) tvp.textColor
-    charSurface <- TTF.solid fc tvp.bgColor (Text.singleton char)
-    _ <- SDL.surfaceBlit charSurface Nothing surface $ Just $ toEnum <$> cPX
-    pure ()
-
-blitCursor ::
-  MonadIO m =>
-  SDL.Surface -> TTF.Fonts -> TextViewPort -> SDL.Point VPC Int -> m ()
-blitCursor surface fonts tvp cursorPos = do
-  cPX <- viewPortToPx tvp fonts cursorPos
-  bounds <- fmap fromEnum <$> SDL.surfaceDimensions surface
-  when (cPX `inBounds` bounds) do
-    let char = fromMaybe ' ' $ tvp.source !? cursorPos
-    fc <- TTF.load fonts tvp.font
-    charWidth <- advance fc char
-    lineSkip <- TTF.lineSkip fc
-    let rect = toEnum <$>
-          SDL.Rectangle cPX (SDL.V2 (charWidth `div` 5) lineSkip)
-    SDL.surfaceFillRect surface (Just rect) tvp.textColor
-
-advance :: MonadIO m => TTF.FontCache -> Char -> m Int
-advance fc char = liftIO do
-  Just (_, _, _, _, adv) <- TTF.glyphMetrics fc char
-  pure adv
-
-inBounds ::
-  (Applicative f, Foldable f, Num a, Ord a) => SDL.Point f a -> f a -> Bool
-inBounds (SDL.P v) b = all (uncurry inBound) $ liftA2 (,) v b
-  where
-    inBound x maxX = 0 <= x && x <= maxX
-
-viewPortToPx ::
-  MonadIO m =>
-  TextViewPort -> TTF.Fonts -> SDL.Point VPC Int -> m (SDL.Point SDL.V2 Int)
-viewPortToPx tvp fonts (SDL.P vpc) = do
-  let SDL.P pos = tvp.position
-      lineText = tvp.source ! vpc.line
-  fc <- TTF.load fonts tvp.font
-  (columnPx, _) <- TTF.size fc $ Text.drop pos.column
-                               $ Text.take vpc.column lineText
-  lineSkip <- TTF.lineSkip fc
-  pure $ SDL.P $ columnPx `SDL.V2` ((vpc.line - pos.line) * lineSkip)
 
 pxToViewPort ::
   MonadIO m =>
@@ -147,14 +68,81 @@ pxToViewPort tvp fonts (SDL.P (SDL.V2 x y)) = do
     (wr, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (i + 1) lineText
     pure $ (wl + wr) `div` 2 > x
   pure $ SDL.P VPC {..}
-
-binarySearch :: (Integral a, Monad m) => (a, a) -> (a -> m Bool) -> m a
-binarySearch (start, end) test = go start end
   where
-    go lo hi
-      | succ lo >= hi = pure hi
-      | otherwise = do
-         let mid = lo + (hi - lo) `div` 2
-         test mid >>= \case
-           True -> go lo mid
-           False -> go mid hi
+    binarySearch :: (Integral a, Monad m) => (a, a) -> (a -> m Bool) -> m a
+    binarySearch (start, end) test = go start end
+      where
+        go lo hi
+          | succ lo >= hi = pure hi
+          | otherwise = do
+             let mid = lo + (hi - lo) `div` 2
+             test mid >>= \case
+               True -> go lo mid
+               False -> go mid hi
+
+blitTextViewPort ::
+  MonadIO m => SDL.Surface -> TTF.Fonts -> TextViewPort -> m ()
+blitTextViewPort surface fonts tvp = do
+  SDL.surfaceFillRect surface Nothing tvp.bgColor
+  let SDL.P vec = tvp.position
+  fc <- TTF.load fonts tvp.font
+  lineSkip <- TTF.lineSkip fc
+  colSkip <- do
+    let pos = fromIntegral vec.column
+        start = Text.take pos $ tvp.source ! vec.line
+    (trueWidth, _) <- TTF.size fc start
+    charWidth <- advance fc 'o'
+    pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
+  bounds <- SDL.surfaceDimensions surface
+  for_ tvp.source.stLines \(i, line) -> do
+    let blitY = toEnum $ (i - vec.line) * lineSkip
+        blitPos = SDL.P $ SDL.V2 (-toEnum colSkip) blitY
+        SDL.V2 _ maxY = bounds
+    when (0 <= blitY && blitY < maxY) do
+      lineSurface <- TTF.solid fc tvp.textColor line
+      _ <- SDL.surfaceBlit lineSurface Nothing surface $ Just blitPos
+      pure ()
+  for_ tvp.selection \selectionPos -> do
+    cPX <- viewPortToPx fc selectionPos
+    when (cPX `inBounds` bounds) do
+      let char = fromMaybe ' ' $ tvp.source !? selectionPos
+      charWidth <- advance fc char
+      let rect = SDL.Rectangle cPX (toEnum <$> SDL.V2 charWidth lineSkip)
+      SDL.surfaceFillRect surface (Just rect) tvp.textColor
+      charSurface <- TTF.solid fc tvp.bgColor (Text.singleton char)
+      _ <- SDL.surfaceBlit charSurface Nothing surface $ Just cPX
+      pure ()
+  for_ tvp.cursors \cursorPos -> do
+    cPX <- viewPortToPx fc cursorPos
+    when (cPX `inBounds` bounds) do
+      let char = fromMaybe ' ' $ tvp.source !? cursorPos
+      charWidth <- advance fc char
+      let rect = SDL.Rectangle cPX
+            (toEnum <$> SDL.V2 (charWidth `div` 5) lineSkip)
+      SDL.surfaceFillRect surface (Just rect) tvp.textColor
+  where
+    advance :: MonadIO m => TTF.FontCache -> Char -> m Int
+    advance fc char = liftIO do
+      Just (_, _, _, _, adv) <- TTF.glyphMetrics fc char
+      pure adv
+
+    inBounds ::
+      (Applicative f, Foldable f, Num a, Ord a) => SDL.Point f a -> f a -> Bool
+    inBounds (SDL.P v) b = all (uncurry inBound) $ liftA2 (,) v b
+      where
+        inBound x maxX = 0 <= x && x <= maxX
+
+    viewPortToPx ::
+      MonadIO m => TTF.FontCache -> SDL.Point VPC Int ->
+      m (SDL.Point SDL.V2 CInt)
+    viewPortToPx fc (SDL.P vpc) = do
+      let SDL.P pos = tvp.position
+          lineText = tvp.source ! vpc.line
+      (columnPx, _) <-
+        if vpc.column < pos.column
+        then pure (-1, -1)
+        else TTF.size fc $ Text.drop pos.column
+                         $ Text.take vpc.column lineText
+      lineSkip <- TTF.lineSkip fc
+      pure $ SDL.P $ toEnum <$> columnPx `SDL.V2`
+        ((vpc.line - pos.line) * lineSkip)

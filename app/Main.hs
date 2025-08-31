@@ -1,7 +1,10 @@
+{-# LANGUAGE RecursiveDo #-}
+
 module Main (main) where
 
 import Control.Applicative ((<**>))
-import Control.Monad (forever, when)
+import Control.Monad (forever)
+import Control.Monad.Fix (mfix)
 import Data.Functor ((<&>))
 import Data.Ord (clamp)
 import Data.Word (Word32)
@@ -93,41 +96,38 @@ banana window fonts sdlHandler timerHandler = do
         SDL.KeycodeMinus -> Just (Right (-1))
         _ -> Nothing
       source = Rich.sourceText text
-      scrollBounds = Rich.boundingBox source
-      makeViewPort font position = Rich.TextViewPort
-        { bgColor = SDL.V4 0 0 0 255
-        , textColor = SDL.V4 255 255 255 255
-        , .. }
+      makeViewPort font position drawCursor mode cursorPos =
+        let (selection, cursors) = case mode of
+              Edit -> if drawCursor then ([], [cursorPos]) else mempty
+              Normal -> ([cursorPos], [])
+         in Rich.TextViewPort
+            { bgColor = SDL.V4 0 0 0 255
+            , textColor = SDL.V4 255 255 255 255
+            , .. }
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
-    scroll <&> updateSP scrollBounds
-  let viewPort = makeViewPort <$> font <*> scrollPos
+    scroll <&> \(SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
+      let Rich.VPC maxX maxY = Rich.boundingBox source
+       in SDL.P $ clamp (0, maxX) (x + dx) `Rich.VPC` clamp (0, maxY) (y - dy)
   drawCursor <- Banana.stepper 0 (clicks Banana.@> time)
     <&> liftA2 (\t lct -> (t - lct) `mod` 1000 < 500) time
-  cursor <- Banana.mapEventIO clickPos ((,) <$> viewPort Banana.<@> clicks)
-            >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
   mode <- Banana.stepper Normal modeE
-  let renderer = renderAll <$> viewPort <*> drawCursor <*> cursor <*> mode
+  let viewPort0 = makeViewPort <$> font <*> scrollPos <*> drawCursor <*> mode
+  viewPort <- mdo
+    cursorPos <- Banana.mapEventIO
+      (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
+      ((,) <$> vport Banana.<@> clicks)
+      >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
+    let vport = viewPort0 <*> cursorPos
+    pure vport
+  let renderer = viewPort <&> \tvp -> do
+        windowSurface <- SDL.getWindowSurface window
+        Rich.blitTextViewPort windowSurface fonts tvp
+        SDL.updateWindowSurface window
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
   onceExit <- Banana.once exitKey
   Banana.reactimate $ onceExit Banana.@> font <&> \f -> do
     _ <- Toml.encodeToFile Toml.genericCodec configPath f
     exitSuccess
-  where
-    updateSP (Rich.VPC maxX maxY) (SDL.V2 dx dy)
-             (SDL.P (Rich.VPC x y)) = SDL.P $
-      clamp (0, maxX) (x + dx) `Rich.VPC` clamp (0, maxY) (y - dy)
-
-    clickPos (viewPort, clickPx) = Rich.pxToViewPort viewPort fonts clickPx
-
-    renderAll viewPort drawCursor cursorPos mode = do
-      windowSurface <- SDL.getWindowSurface window
-      Rich.blitVisibleText windowSurface fonts viewPort
-      case mode of
-        Normal ->
-          Rich.blitSelection windowSurface fonts viewPort cursorPos
-        Edit -> when drawCursor $
-          Rich.blitCursor windowSurface fonts viewPort cursorPos
-      SDL.updateWindowSurface window
