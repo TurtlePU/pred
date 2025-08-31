@@ -23,10 +23,10 @@ and you're good to go.
 
 ## TODO list
 
-- [ ] modes
-- [ ] cursor
+- [x] modes
+- [x] cursor
 - [ ] basic editing
-- [ ] lazy rendering
+- [x] lazy rendering
 - [ ] file watching with `fsnotify`
 - [ ] event multiplexing with channels
 - [ ] font picker
