@@ -5,6 +5,7 @@ module Main (main) where
 import Control.Applicative ((<**>))
 import Control.Monad (forever)
 import Control.Monad.Fix (mfix)
+import Data.Foldable (traverse_)
 import Data.Functor ((<&>))
 import Data.Ord (clamp)
 import Data.Word (Word32)
@@ -27,6 +28,8 @@ import Pred.RichText qualified as Rich
 import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit
+
+data Action = Enter Mode | ChangeFS Int | Exit
 
 main :: IO ()
 main = Resource.runResourceT do
@@ -86,24 +89,30 @@ banana window fonts sdlHandler timerHandler = do
               && mbed.mouseButtonEventWindow == Just window ->
                 Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
-      modeE = Banana.filterJust $ press <&> \case
-        SDL.KeycodeEscape -> Just Normal
-        SDL.KeycodeReturn -> Just Edit
-        _ -> Nothing
-      (exitKey, resize) = Banana.split $ Banana.filterJust $ press <&> \case
-        SDL.KeycodeQ -> Just (Left ())
-        SDL.KeycodeEquals -> Just (Right 1)
-        SDL.KeycodeMinus -> Just (Right (-1))
-        _ -> Nothing
+      actionMap =
+        [ (Enter Normal, SDL.KeycodeEscape)
+        , (Enter Edit, SDL.KeycodeReturn)
+        , (ChangeFS (-1), SDL.KeycodeMinus)
+        , (ChangeFS 1, SDL.KeycodeEquals)
+        , (Exit, SDL.KeycodeQ)
+        ]
       source = Rich.sourceText text
       makeViewPort font position drawCursor mode cursorPos =
         let (selection, cursors) = case mode of
-              Edit -> if drawCursor then ([], [cursorPos]) else mempty
+              Edit -> ([], [cursorPos | drawCursor])
               Normal -> ([cursorPos], [])
          in Rich.TextViewPort
             { bgColor = SDL.V4 0 0 0 255
             , textColor = SDL.V4 255 255 255 255
             , .. }
+  actions <- collect $ press <&> \kc -> [ ac | (ac, k) <- actionMap, k == kc ]
+  let modeE = Banana.filterJust $ actions <&> \case
+        Enter mode -> Just mode
+        _ -> Nothing
+      (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
+        Exit -> Just (Left ())
+        ChangeFS ds -> Just (Right ds)
+        _ -> Nothing
   font <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
@@ -131,3 +140,9 @@ banana window fonts sdlHandler timerHandler = do
   Banana.reactimate $ onceExit Banana.@> font <&> \f -> do
     _ <- Toml.encodeToFile Toml.genericCodec configPath f
     exitSuccess
+
+collect :: Foldable f => Banana.Event (f a) -> Banana.MomentIO (Banana.Event a)
+collect events = do
+  (handler, fire) <- liftIO Banana.newAddHandler
+  Banana.reactimate $ events <&> traverse_ fire
+  Banana.fromAddHandler handler
