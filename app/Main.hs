@@ -1,5 +1,4 @@
 {-# LANGUAGE ApplicativeDo #-}
-{-# LANGUAGE RecursiveDo #-}
 
 module Main (main) where
 
@@ -8,7 +7,6 @@ import Control.Monad (forever, join)
 import Control.Monad.Fix (mfix)
 import Data.Foldable (traverse_)
 import Data.Functor ((<&>))
-import Data.Ord (clamp)
 import Data.Word (Word32)
 import System.Exit (exitSuccess)
 
@@ -30,7 +28,7 @@ import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit
 
-data Action = Enter Mode | ChangeFS Int | Exit
+data Action = Move (Rich.VPC Int) | Enter Mode | ChangeFS Int | Exit
 
 main :: IO ()
 main = Resource.runResourceT do
@@ -80,8 +78,7 @@ banana window fonts sdlHandler timerHandler = do
           SDL.KeyboardEvent ked
             | ked.keyboardEventKeyMotion == SDL.Pressed ->
               Just (Left ked.keyboardEventKeysym.keysymKeycode)
-          SDL.MouseWheelEvent mwed -> Just $ Right
-            (fromIntegral <$> mwed.mouseWheelEventPos)
+          SDL.MouseWheelEvent mwed -> Just $ Right mwed.mouseWheelEventPos
           _ -> Nothing
       clicks = Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
@@ -91,7 +88,11 @@ banana window fonts sdlHandler timerHandler = do
                 Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
       actionMap =
-        [ (Enter Normal, SDL.KeycodeEscape)
+        [ (Move (Rich.VPC (-1) 0), SDL.KeycodeLeft)
+        , (Move (Rich.VPC 0 (-1)), SDL.KeycodeUp)
+        , (Move (Rich.VPC 0 1), SDL.KeycodeDown)
+        , (Move (Rich.VPC 1 0), SDL.KeycodeRight)
+        , (Enter Normal, SDL.KeycodeEscape)
         , (Enter Edit, SDL.KeycodeReturn)
         , (ChangeFS (-1), SDL.KeycodeMinus)
         , (ChangeFS 1, SDL.KeycodeEquals)
@@ -103,37 +104,42 @@ banana window fonts sdlHandler timerHandler = do
         Exit -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
+      (modes, moves) = Banana.split $ Banana.filterJust $ actions <&> \case
+        Enter mode -> Just (Left mode)
+        Move dm -> Just (Right dm)
+        _ -> Nothing
   fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
-    scroll <&> \(SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
-      let Rich.VPC maxX maxY = Rich.boundingBox source
-       in SDL.P $ clamp (0, maxX) (x + dx) `Rich.VPC` clamp (0, maxY) (y - dy)
-  drawCursorB <- Banana.stepper 0 (clicks Banana.@> time)
-    <&> liftA2 (\t lct -> (t - lct) `mod` 1000 < 500) time
-  modeB <- Banana.stepper Normal $ Banana.filterJust $ actions <&> \case
-    Enter mode -> Just mode
-    _ -> Nothing
-  let sc = do
-        drawCursor <- drawCursorB
-        mode <- modeB
-        pure case mode of
-          Edit -> \cursorPos -> ([], [cursorPos | drawCursor])
-          Normal -> \cursorPos -> ([cursorPos], [])
-  viewPort <- mdo
-    cursorPosB <- Banana.mapEventIO
+    scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
+      Rich.clampToBox source $ SDL.P $ Rich.VPC (x + dx) (y - dy)
+  modeB <- Banana.stepper Normal modes
+  viewPort <- mfix \vport -> do
+    clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
       ((,) <$> vport Banana.<@> clicks)
-      >>= Banana.stepper (SDL.P $ Rich.VPC 0 0)
-    let vport = do
-          font <- fontB
-          position <- scrollPos
-          (selection, cursors) <- sc <*> cursorPosB
-          pure Rich.TextViewPort
-                { bgColor = SDL.V4 0 0 0 255
-                , textColor = SDL.V4 255 255 255 255
-                , .. }
-    pure vport
+    let cursorActions = Banana.unions
+          [ const <$> clickPos
+          , Rich.moveViewPort source <$> moves
+          ]
+    cursorPosB <- Banana.accumB (SDL.P $ Rich.VPC 0 0) cursorActions
+    drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
+      <$> Banana.stepper 0 (cursorActions Banana.@> time)
+    let textManipulators = do
+          mode <- modeB
+          cursorPos <- cursorPosB
+          drawCursor <- drawCursorB
+          pure case mode of
+            Edit -> ([], [cursorPos | drawCursor])
+            Normal -> ([cursorPos], [])
+    pure do
+      font <- fontB
+      position <- scrollPos
+      (selection, cursors) <- textManipulators
+      pure Rich.TextViewPort
+        { bgColor = SDL.V4 0 0 0 255
+        , textColor = SDL.V4 255 255 255 255
+        , .. }
   let renderer = viewPort <&> \tvp -> do
         windowSurface <- SDL.getWindowSurface window
         Rich.blitTextViewPort windowSurface fonts tvp

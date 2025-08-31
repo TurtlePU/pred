@@ -3,6 +3,8 @@ module Pred.RichText
   , sourceText
   , VPC (..)
   , boundingBox
+  , clampToBox
+  , moveViewPort
   , TextViewPort (..)
   , pxToViewPort
   , blitTextViewPort
@@ -11,6 +13,7 @@ module Pred.RichText
 import Control.Monad (when)
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Foreign.C (CInt)
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -35,6 +38,18 @@ data VPC a = VPC { column :: a, line :: a } deriving (Functor, Generic)
 boundingBox :: SourceText -> VPC Int
 boundingBox (ST st) =
   maximum . (0 :) <$> liftA2 VPC (Text.length . snd <$>) (fst <$>) st
+
+clampToBox :: SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
+clampToBox (boundingBox -> VPC maxC maxL) (SDL.P (VPC c l)) =
+  SDL.P $ clamp (0, maxC) c `VPC` clamp (0, maxL) l
+
+moveViewPort :: SourceText -> VPC Int -> SDL.Point VPC Int -> SDL.Point VPC Int
+moveViewPort st (VPC dc dl) (SDL.P (VPC c l)) = SDL.P $ c' `VPC` l'
+  where
+    VPC _ maxL = boundingBox st
+    l' = if dl == 0 then l else clamp (0, maxL) (l + dl)
+    maxC = Text.length (st ! l')
+    c' = if dc == 0 then c else clamp (0, maxC) (c + dc)
 
 (!?) :: SourceText -> SDL.Point VPC Int -> Maybe Char
 ST st !? SDL.P vpc = lookup vpc.line st >>= safeIndex vpc.column

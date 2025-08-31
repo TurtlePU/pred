@@ -25,6 +25,7 @@ common stanzas
         OverloadedStrings,
         RebindableSyntax,
         RecordWildCards,
+        ViewPatterns,
     ghc-options:        -Wall -Werror
 
 executable pred
