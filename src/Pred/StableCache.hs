@@ -23,7 +23,7 @@ closeCache :: StableCache k v -> IO ()
 closeCache (SC sc) = IORef.readIORef sc >>= traverse_ Weak.finalize
 
 request :: MonadIO m => StableCache k v -> k -> IO (v, IO ()) -> m v
-request (SC sc) key gen = liftIO do
+request (SC sc) !key gen = liftIO do
   name <- StableName.makeStableName key
   IORef.readIORef sc
     >>= maybe (pure Nothing) Weak.deRefWeak . HashMap.lookup name
