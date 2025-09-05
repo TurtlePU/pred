@@ -10,6 +10,7 @@ module Pred.TTF
   , size
   , Color
   , solid
+  , blended
   ) where
 
 import Control.Monad.IO.Class (MonadIO)
@@ -20,6 +21,7 @@ import SDL.Font qualified as TTF
 
 import Pred.Prelude
 import Pred.StableCache
+import Toml qualified
 
 newtype Fonts = MkFonts { cache :: StableCache Font FontCache }
   deriving Generic
@@ -35,6 +37,9 @@ data Font = MkFont
   , pointSize :: TTF.PointSize
   }
   deriving (Generic, Eq, Show)
+
+instance Toml.HasCodec Font where
+  hasCodec = const Toml.genericCodec
 
 load :: MonadIO m => Fonts -> Font -> m FontCache
 load fonts font = request fonts.cache font do
@@ -74,4 +79,13 @@ solid fc color text = do
     pure (cache, closeCache cache)
   request perColor text do
     surface <- TTF.solid fc.font color text
+    pure (surface, SDL.freeSurface surface)
+
+blended :: MonadIO m => FontCache -> Color -> Text -> m SDL.Surface
+blended fc color text = do
+  perColor <- request fc.surfaces color do
+    cache <- newStableCache
+    pure (cache, closeCache cache)
+  request perColor text do
+    surface <- TTF.blended fc.font color text
     pure (surface, SDL.freeSurface surface)
