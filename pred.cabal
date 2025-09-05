@@ -36,6 +36,7 @@ executable pred
     -- other-modules:
     build-depends:
         base,
+        filepath,
         directory,
         fontconfig-pure,
         optparse-applicative,
@@ -54,10 +55,17 @@ library
         Pred.RichText,
         Pred.StableCache,
         Pred.TTF,
+        Pred.UI,
     build-depends:
         base,
+        filepath,
+        directory,
+        fontconfig-pure,
         generic-lens,
+        reactive-banana,
+        resourcet,
         sdl2,
         sdl2-ttf,
         text,
+        tomland,
         unordered-containers,
