@@ -10,6 +10,7 @@ module Pred.TTF
   , size
   , Color
   , solid
+  , blended
   ) where
 
 import Control.Monad.IO.Class (MonadIO)
@@ -43,7 +44,7 @@ load fonts font = request fonts.cache font do
 
 data FontCache = MkFontCache
   { font     :: TTF.Font
-  , surfaces :: StableCache Color (StableCache Text SDL.Surface)
+  , surfaces :: StableCache (BlitMode, Color) (StableCache Text SDL.Surface)
   }
   deriving Generic
 
@@ -67,11 +68,29 @@ size fc = TTF.size fc.font
 
 type Color = TTF.Color
 
-solid :: MonadIO m => FontCache -> Color -> Text -> m SDL.Surface
-solid fc color text = do
-  perColor <- request fc.surfaces color do
+data BlitMode
+  = Solid
+  | Blended
+  deriving (Eq, Ord, Show)
+
+renderTextSurface
+  :: MonadIO m
+  => FontCache -> BlitMode -> Color -> Text -> m SDL.Surface
+renderTextSurface fc mode fg text = do
+  perKey <- request fc.surfaces (mode, fg) do
     cache <- newStableCache
     pure (cache, closeCache cache)
-  request perColor text do
-    surface <- TTF.solid fc.font color text
+
+  request perKey text do
+    surface <- case mode of
+      Solid        -> TTF.solid   fc.font fg text
+      Blended      -> TTF.blended fc.font fg text
     pure (surface, SDL.freeSurface surface)
+
+
+
+solid :: MonadIO m => FontCache -> Color -> Text -> m SDL.Surface
+solid fc fg txt = renderTextSurface fc Solid fg txt
+
+blended :: MonadIO m => FontCache -> Color -> Text -> m SDL.Surface
+blended fc fg txt = renderTextSurface fc Blended fg txt
