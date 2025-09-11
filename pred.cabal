@@ -52,11 +52,13 @@ library
     exposed-modules:
         Pred.Prelude,
         Pred.RichText,
+        Pred.Rope,
         Pred.StableCache,
         Pred.TTF,
     build-depends:
         base,
         generic-lens,
+        mtl,
         sdl2,
         sdl2-ttf,
         text,
