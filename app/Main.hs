@@ -25,6 +25,7 @@ import Toml qualified
 import Pred.Prelude
 import Pred.RichText qualified as Rich
 import Pred.TTF qualified as TTF
+import Pred.Fonts qualified as Fonts
 
 data Mode = Normal | Edit
 
@@ -99,6 +100,8 @@ banana window fonts sdlHandler timerHandler = do
         , (Exit, SDL.KeycodeQ)
         ]
       source = Rich.sourceText text
+  monoPref0 <- liftIO $ Fonts.buildMonospaceFallbacks initialFont
+  let fontsPrefB = pure monoPref0 -- | HOBA
   actions <- collect $ press <&> \kc -> [ ac | (ac, k) <- actionMap, k == kc ]
   let (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
         Exit -> Just (Left ())
@@ -132,14 +135,20 @@ banana window fonts sdlHandler timerHandler = do
           pure case mode of
             Edit -> ([], [cursorPos | drawCursor])
             Normal -> ([cursorPos], [])
-    pure do
-      font <- fontB
-      position <- scrollPos
-      (selection, cursors) <- textManipulators
-      pure Rich.TextViewPort
-        { bgColor = SDL.V4 0 0 0 255
-        , textColor = SDL.V4 255 255 255 255
-        , .. }
+    pure $
+      (\position (selection, cursors) fontsPref ->
+          Rich.TextViewPort
+          { bgColor   = SDL.V4 0 0 0 255
+          , textColor = SDL.V4 255 255 255 255
+          , source    = source
+          , position  = position
+          , selection = selection
+          , cursors   = cursors
+          , fontsPref = fontsPref
+          })
+      <$> scrollPos
+      <*> textManipulators
+      <*> fontsPrefB
   let renderer = viewPort <&> \tvp -> do
         windowSurface <- SDL.getWindowSurface window
         Rich.blitTextViewPort windowSurface fonts tvp

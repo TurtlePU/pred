@@ -55,6 +55,7 @@ library
         Pred.Rope,
         Pred.StableCache,
         Pred.TTF,
+        Pred.Fonts
     build-depends:
         base,
         generic-lens,
@@ -63,3 +64,4 @@ library
         sdl2-ttf,
         text,
         unordered-containers,
+        fontconfig-pure,
