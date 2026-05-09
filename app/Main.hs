@@ -26,7 +26,7 @@ import Toml qualified
 import Pred.RichText qualified as Rich
 import Pred.TTF qualified as TTF
 
-data Mode = Normal | Edit
+data Mode = Normal | Edit deriving (Bounded, Enum, Eq)
 
 data Action = Move (Rich.VPC Int) | Enter Mode | ChangeFS Int | Exit
 
@@ -91,32 +91,35 @@ banana window fonts sdlHandler timerHandler = do
                 Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
       actionMap =
-        [ (Move (Rich.VPC (-1) 0), SDL.KeycodeLeft)
-        , (Move (Rich.VPC 0 (-1)), SDL.KeycodeUp)
-        , (Move (Rich.VPC 0 1), SDL.KeycodeDown)
-        , (Move (Rich.VPC 1 0), SDL.KeycodeRight)
-        , (Enter Normal, SDL.KeycodeEscape)
-        , (Enter Edit, SDL.KeycodeReturn)
-        , (ChangeFS (-1), SDL.KeycodeMinus)
-        , (ChangeFS 1, SDL.KeycodeEquals)
-        , (Exit, SDL.KeycodeQ)
+        [ (Move (Rich.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
+        , (Move (Rich.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
+        , (Move (Rich.VPC 0 1), [minBound..maxBound], SDL.KeycodeDown)
+        , (Move (Rich.VPC 1 0), [minBound..maxBound], SDL.KeycodeRight)
+        , (Enter Normal, [Edit], SDL.KeycodeEscape)
+        , (Enter Edit, [Normal], SDL.KeycodeReturn)
+        , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
+        , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
+        , (Exit, [Normal], SDL.KeycodeQ)
         ]
       source = Rich.sourceText text
-  actions <- collect $ press <&> \kc -> [ ac | (ac, k) <- actionMap, k == kc ]
+  (actions, modes) <- mfix \ ~(_, modes) -> do
+    actions' <- collect $
+        (\md kc -> [ ac | (ac, ms, k) <- actionMap, k == kc, md `elem` ms ])
+        <$> modes Banana.<@> press
+    modes' <- Banana.stepper Normal $ Banana.filterJust $ actions' <&> \case
+      Enter mode -> Just mode; _ -> Nothing
+    pure (actions', modes')
   let (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
         Exit -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
-      (modes, moves) = Banana.split $ Banana.filterJust $ actions <&> \case
-        Enter mode -> Just (Left mode)
-        Move dm -> Just (Right dm)
-        _ -> Nothing
+      moves = Banana.filterJust $ actions <&> \case
+        Move dm -> Just dm; _ -> Nothing
   fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
     scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
       Rich.clampToBox source $ SDL.P $ Rich.VPC (x + dx) (y - dy)
-  modeB <- Banana.stepper Normal modes
   viewPort <- mfix \vport -> do
     clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
@@ -129,7 +132,7 @@ banana window fonts sdlHandler timerHandler = do
     drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
       <$> Banana.stepper 0 (cursorActions Banana.@> time)
     let textManipulators = do
-          mode <- modeB
+          mode <- modes
           cursorPos <- cursorPosB
           drawCursor <- drawCursorB
           pure case mode of
