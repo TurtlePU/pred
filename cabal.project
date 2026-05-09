@@ -1,2 +1,5 @@
-allow-newer: fontconfig-pure:base
+allow-newer:
+  fontconfig-pure:base,
+  msgpack:base,
+  reactive-banana:pqueue,
 packages: .

@@ -3,15 +3,16 @@
 module Main (main) where
 
 import Control.Applicative ((<**>))
-import Control.Monad (forever, join)
+import Control.Exception (bracket)
+import Control.Monad (forever)
 import Control.Monad.Fix (mfix)
 import Data.Foldable (traverse_)
+import Data.String qualified as String
 import Data.Functor ((<&>))
 import Data.Word (Word32)
 import System.Exit (exitSuccess)
 
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Resource qualified as Resource
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Graphics.Text.Font.Choose qualified as FC
@@ -22,7 +23,6 @@ import SDL qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
-import Pred.Prelude
 import Pred.RichText qualified as Rich
 import Pred.TTF qualified as TTF
 
@@ -31,15 +31,17 @@ data Mode = Normal | Edit
 data Action = Move (Rich.VPC Int) | Enter Mode | ChangeFS Int | Exit
 
 main :: IO ()
-main = Resource.runResourceT do
+main = do
   SDL.initializeAll
-  (_, window) <- SDL.createWindow "PrEd proof editor" SDL.defaultWindow
-    { windowHighDPI = True
-    , windowMode = SDL.Maximized
-    , windowResizable = True
-    } `Resource.allocate` SDL.destroyWindow
-  (_, fonts) <- TTF.newFonts `Resource.allocate` TTF.closeFonts
-  liftIO do
+  let newWindow = SDL.createWindow (String.fromString "PrEd proof editor")
+        SDL.defaultWindow
+          { SDL.windowHighDPI = True
+          , SDL.windowMode = SDL.Maximized
+          , SDL.windowResizable = True
+          }
+      withWindow = newWindow `bracket` SDL.destroyWindow
+      withFonts = TTF.newFonts `bracket` TTF.closeFonts
+  withWindow \window -> withFonts \fonts -> do
     (sdlHandler, fireSDL) <- Banana.newAddHandler
     (timerHandler, fireTimer) <- Banana.newAddHandler
     Banana.compile (banana window fonts sdlHandler timerHandler)
@@ -60,7 +62,7 @@ banana window fonts sdlHandler timerHandler = do
       <> "an IDE specifically tailored for interactive proof assistants."))
   text <- liftIO $ Dir.doesFileExist filePath >>= \case
     True -> Text.readFile filePath
-    False -> pure ""
+    False -> pure Text.empty
   configPath <- liftIO $ Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
   initialFont <- liftIO $ Dir.doesFileExist configPath >>= \case
     True -> Toml.decodeFile Toml.genericCodec configPath
@@ -69,23 +71,24 @@ banana window fonts sdlHandler timerHandler = do
       pattern <- maybe (error "lol no Fira Code") pure $
         FC.fontMatch fc (FC.nameParse "Fira Code")
       path <- maybe (error "lol no filepath") (pure . Text.pack) $
-        FC.getValue "file" pattern
-      pure TTF.MkFont { pointSize = 36, .. }
+        FC.getValue (String.fromString "file") pattern
+      pure TTF.MkFont { pointSize = 36, path = path }
   sdlE <- Banana.fromAddHandler sdlHandler
   time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
-        case e.eventPayload of
+        case SDL.eventPayload e of
           SDL.KeyboardEvent ked
-            | ked.keyboardEventKeyMotion == SDL.Pressed ->
-              Just (Left ked.keyboardEventKeysym.keysymKeycode)
-          SDL.MouseWheelEvent mwed -> Just $ Right mwed.mouseWheelEventPos
+            | SDL.keyboardEventKeyMotion ked == SDL.Pressed ->
+              Just . Left $ SDL.keysymKeycode (SDL.keyboardEventKeysym ked)
+          SDL.MouseWheelEvent mwed ->
+              Just $ Right (SDL.mouseWheelEventPos mwed)
           _ -> Nothing
       clicks = Banana.filterJust $ sdlE <&> \e ->
-        case e.eventPayload of
+        case SDL.eventPayload e of
           SDL.MouseButtonEvent mbed
-            | mbed.mouseButtonEventMotion == SDL.Pressed
-              && mbed.mouseButtonEventWindow == Just window ->
-                Just (fromIntegral <$> mbed.mouseButtonEventPos)
+            | SDL.mouseButtonEventMotion mbed == SDL.Pressed
+              && SDL.mouseButtonEventWindow mbed == Just window ->
+                Just (fromIntegral <$> SDL.mouseButtonEventPos mbed)
           _ -> Nothing
       actionMap =
         [ (Move (Rich.VPC (-1) 0), SDL.KeycodeLeft)
@@ -109,7 +112,7 @@ banana window fonts sdlHandler timerHandler = do
         Move dm -> Just (Right dm)
         _ -> Nothing
   fontB <- Banana.accumB initialFont $ resize <&>
-    \ds font -> font { pointSize = font.pointSize + ds }
+    \ds font -> font { TTF.pointSize = TTF.pointSize font + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
     scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
       Rich.clampToBox source $ SDL.P $ Rich.VPC (x + dx) (y - dy)
@@ -137,9 +140,14 @@ banana window fonts sdlHandler timerHandler = do
       position <- scrollPos
       (selection, cursors) <- textManipulators
       pure Rich.TextViewPort
-        { bgColor = SDL.V4 0 0 0 255
+        { source = source
+        , font = font
+        , bgColor = SDL.V4 0 0 0 255
         , textColor = SDL.V4 255 255 255 255
-        , .. }
+        , position = position
+        , selection = selection
+        , cursors = cursors
+        }
   let renderer = viewPort <&> \tvp -> do
         windowSurface <- SDL.getWindowSurface window
         Rich.blitTextViewPort windowSurface fonts tvp

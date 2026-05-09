@@ -12,8 +12,6 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.HashMap.Lazy (HashMap)
 import Data.HashMap.Lazy qualified as HashMap
 
-import Pred.Prelude
-
 newtype StableCache k v = SC (IORef (HashMap (StableName k) (Weak v)))
 
 newStableCache :: IO (StableCache k v)
