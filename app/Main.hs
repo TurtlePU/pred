@@ -76,19 +76,19 @@ banana window fonts sdlHandler timerHandler = do
   sdlE <- Banana.fromAddHandler sdlHandler
   time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
-        case SDL.eventPayload e of
+        case e.eventPayload of
           SDL.KeyboardEvent ked
-            | SDL.keyboardEventKeyMotion ked == SDL.Pressed ->
-              Just . Left $ SDL.keysymKeycode (SDL.keyboardEventKeysym ked)
+            | ked.keyboardEventKeyMotion == SDL.Pressed ->
+              Just (Left ked.keyboardEventKeysym.keysymKeycode)
           SDL.MouseWheelEvent mwed ->
-              Just $ Right (SDL.mouseWheelEventPos mwed)
+              Just (Right mwed.mouseWheelEventPos)
           _ -> Nothing
       clicks = Banana.filterJust $ sdlE <&> \e ->
-        case SDL.eventPayload e of
+        case e.eventPayload of
           SDL.MouseButtonEvent mbed
-            | SDL.mouseButtonEventMotion mbed == SDL.Pressed
-              && SDL.mouseButtonEventWindow mbed == Just window ->
-                Just (fromIntegral <$> SDL.mouseButtonEventPos mbed)
+            | mbed.mouseButtonEventMotion == SDL.Pressed
+              && mbed.mouseButtonEventWindow == Just window ->
+                Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
       actionMap =
         [ (Move (Rich.VPC (-1) 0), SDL.KeycodeLeft)
@@ -112,7 +112,7 @@ banana window fonts sdlHandler timerHandler = do
         Move dm -> Just (Right dm)
         _ -> Nothing
   fontB <- Banana.accumB initialFont $ resize <&>
-    \ds font -> font { TTF.pointSize = TTF.pointSize font + ds }
+    \ds font -> font { TTF.pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
     scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
       Rich.clampToBox source $ SDL.P $ Rich.VPC (x + dx) (y - dy)

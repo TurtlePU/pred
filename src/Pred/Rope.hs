@@ -21,7 +21,7 @@ delimit split diff z seed delims =
    in Rope delimited end
 
 cumsum :: (Traversable f, Monoid a) => Rope f a -> (f a, a)
-cumsum = first delimited . lscan (<>) mempty
+cumsum = first (.delimited) . lscan (<>) mempty
 
 onDelimited :: Functor f => (a -> a) -> Rope f a -> Rope f a
-act `onDelimited` rope = rope { delimited = act <$> delimited rope }
+act `onDelimited` rope = rope { delimited = act <$> rope.delimited }

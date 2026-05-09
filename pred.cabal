@@ -16,7 +16,12 @@ extra-doc-files:    CHANGELOG.md
 
 common stanzas
     default-language:   GHC2024
-    default-extensions: BlockArguments, ImportQualifiedPost, ViewPatterns
+    default-extensions:
+        BlockArguments,
+        NoFieldSelectors,
+        ImportQualifiedPost,
+        OverloadedRecordDot,
+        ViewPatterns,
     ghc-options:        -Wall -Werror
 
 executable pred
