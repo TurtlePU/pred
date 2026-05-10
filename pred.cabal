@@ -46,6 +46,7 @@ library
     hs-source-dirs:  src
     exposed-modules:
         Pred.RichText,
+        Pred.SourceText,
         Pred.StableCache,
         Pred.TTF,
     build-depends:

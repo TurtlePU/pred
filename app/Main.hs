@@ -23,12 +23,13 @@ import SDL qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
+import Pred.SourceText qualified as Source
 import Pred.RichText qualified as Rich
 import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit deriving (Bounded, Enum, Eq)
 
-data Action = Move (Rich.VPC Int) | Enter Mode | ChangeFS Int | Exit
+data Action = Move (Source.VPC Int) | Enter Mode | ChangeFS Int | Exit
 
 main :: IO ()
 main = do
@@ -91,17 +92,17 @@ banana window fonts sdlHandler timerHandler = do
                 Just (fromIntegral <$> mbed.mouseButtonEventPos)
           _ -> Nothing
       actionMap =
-        [ (Move (Rich.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
-        , (Move (Rich.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
-        , (Move (Rich.VPC 0 1), [minBound..maxBound], SDL.KeycodeDown)
-        , (Move (Rich.VPC 1 0), [minBound..maxBound], SDL.KeycodeRight)
+        [ (Move (Source.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
+        , (Move (Source.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
+        , (Move (Source.VPC 0 1), [minBound..maxBound], SDL.KeycodeDown)
+        , (Move (Source.VPC 1 0), [minBound..maxBound], SDL.KeycodeRight)
         , (Enter Normal, [Edit], SDL.KeycodeEscape)
         , (Enter Edit, [Normal], SDL.KeycodeReturn)
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
         , (Exit, [Normal], SDL.KeycodeQ)
         ]
-      source = Rich.sourceText text
+      source = Source.sourceText text
   (actions, modes) <- mfix \ ~(_, modes) -> do
     actions' <- collect $
         (\md kc -> [ ac | (ac, ms, k) <- actionMap, k == kc, md `elem` ms ])
@@ -117,18 +118,18 @@ banana window fonts sdlHandler timerHandler = do
         Move dm -> Just dm; _ -> Nothing
   fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
-  scrollPos <- Banana.accumB (SDL.P $ Rich.VPC 0 0) $
-    scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Rich.VPC x y)) ->
-      Rich.clampToBox source $ SDL.P $ Rich.VPC (x + dx) (y - dy)
+  scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $
+    scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
+      Source.clampToBox source $ SDL.P $ Source.VPC (x + dx) (y - dy)
   viewPort <- mfix \vport -> do
     clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
       ((,) <$> vport Banana.<@> clicks)
     let cursorActions = Banana.unions
           [ const <$> clickPos
-          , Rich.moveViewPort source <$> moves
+          , Source.moveViewPort source <$> moves
           ]
-    cursorPosB <- Banana.accumB (SDL.P $ Rich.VPC 0 0) cursorActions
+    cursorPosB <- Banana.accumB (SDL.P $ Source.VPC 0 0) cursorActions
     drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
       <$> Banana.stepper 0 (cursorActions Banana.@> time)
     let textManipulators = do
