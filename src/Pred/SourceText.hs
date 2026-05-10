@@ -9,6 +9,7 @@ module Pred.SourceText
   , (!?)
   , splitAt
   , insert
+  , delete
   ) where
 
 import Data.Foldable1 (foldl1')
@@ -58,7 +59,10 @@ instance Monoid SourceText where
   mconcat = foldl' (<<>>) mempty
 
 -- | 'VPC' is short for "viewport coordinates".
-data VPC a = VPC { column :: a, line :: a } deriving Functor
+data VPC a = VPC { column :: a, line :: a } deriving (Eq, Functor)
+
+instance Ord a => Ord (VPC a) where
+    VPC c l `compare` VPC c' l' = compare l l' <> compare c c'
 
 boundingBox :: SourceText -> VPC Int
 boundingBox st = VPC
@@ -107,3 +111,10 @@ splitAt (SDL.P VPC { line, column }) st =
 insert :: SDL.Point VPC Int -> Text -> SourceText -> SourceText
 insert i text (splitAt i -> (before, after)) =
   before <<>> sourceText text <<>> after
+
+delete :: SDL.Point VPC Int -> VPC Int -> SourceText -> SourceText
+delete pos len st =
+    let pos' = moveViewPort st len pos
+        (p, q) = (min pos pos', max pos pos')
+     in let (splitAt p -> (st1, _), st3) = splitAt q st
+        in st1 <<>> st3
