@@ -53,6 +53,7 @@ library
         base,
         containers,
         mtl,
+        multiset,
         sdl2,
         sdl2-ttf,
         text,

@@ -8,19 +8,23 @@ module Pred.SourceText
   , moveViewPort
   , (!?)
   , splitAt
+  , splits
   , insert
   , delete
   ) where
 
 import Data.Foldable1 (foldl1')
 import Data.List qualified as List
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
-import Data.Semigroup (Semigroup(..))
+import Data.Semigroup (Semigroup (..))
 import Prelude hiding (splitAt)
 
 import Data.IntMap (IntMap)
 import Data.IntMap qualified as IntMap
+import Data.MultiSet (MultiSet)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import SDL qualified
@@ -107,6 +111,11 @@ splitAt (SDL.P VPC { line, column }) st =
         , stLineCount = 0 `max` st.stLineCount - line
         }
       )
+
+splits :: MultiSet (SDL.Point VPC Int) -> SourceText -> NonEmpty SourceText
+splits is st =
+  let scan = NonEmpty.scanr (\p -> splitAt p . fst) (st, st) is
+   in fst (NonEmpty.head scan) NonEmpty.:| fmap snd (NonEmpty.init scan)
 
 insert :: SDL.Point VPC Int -> Text -> SourceText -> SourceText
 insert i text (splitAt i -> (before, after)) =
