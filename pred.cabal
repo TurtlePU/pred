@@ -46,11 +46,11 @@ library
     hs-source-dirs:  src
     exposed-modules:
         Pred.RichText,
-        Pred.Rope,
         Pred.StableCache,
         Pred.TTF,
     build-depends:
         base,
+        containers,
         mtl,
         sdl2,
         sdl2-ttf,

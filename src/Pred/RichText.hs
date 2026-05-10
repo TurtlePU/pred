@@ -5,39 +5,72 @@ module Pred.RichText
   , boundingBox
   , clampToBox
   , moveViewPort
+  , splitAt
+  , insert
   , TextViewPort (..)
   , pxToViewPort
   , blitTextViewPort
   ) where
 
 import Control.Monad (when)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable (for_)
+import Data.Foldable1 (foldl1')
+import qualified Data.List as List
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
+import Data.Semigroup (Semigroup (..))
 import Foreign.C (CInt)
+import Prelude hiding (splitAt)
 
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.IntMap (IntMap)
+import Data.IntMap qualified as IntMap
 import Data.Text (Text)
 import Data.Text qualified as Text
 import SDL qualified
 
 import Pred.TTF qualified as TTF
 
-newtype SourceText = ST { stLines :: [(Int, Text)] }
+data SourceText = ST
+  { stLines :: IntMap Text
+  , stLineCount :: Int
+  }
 
 sourceText :: Text -> SourceText
-sourceText = ST . filter (not . Text.null . snd) . zip [0..] . Text.lines
+sourceText (zip [0..] . Text.lines -> annot) = ST
+  { stLines = IntMap.fromList $ filter (not . Text.null . snd) annot
+  , stLineCount = maybe 0 (succ . fst . snd) (List.unsnoc annot)
+  }
 
 (!) :: SourceText -> Int -> Text
-ST st ! i = fromMaybe Text.empty (lookup i st)
+st ! i = fromMaybe Text.empty (st.stLines IntMap.!? i)
+
+infixl 6 <<>>
+
+(<<>>) :: SourceText -> SourceText -> SourceText
+st <<>> st' = ST
+    { stLines = IntMap.unionWith (<>) st.stLines (modifier st'.stLines)
+    , stLineCount = st'.stLineCount + addend
+    }
+    where
+      addend = if st.stLineCount == 0 then 0 else st.stLineCount - 1
+      modifier = if addend == 0 then id else IntMap.mapKeys (+ addend)
+
+instance Semigroup SourceText where
+  (<>) = (<<>>)
+  sconcat = foldl1' (<<>>)
+
+instance Monoid SourceText where
+  mempty = ST IntMap.empty 0
+  mconcat = foldl' (<<>>) mempty
 
 -- | 'VPC' is short for "viewport coordinates".
 data VPC a = VPC { column :: a, line :: a } deriving Functor
 
 boundingBox :: SourceText -> VPC Int
-boundingBox (ST st) = maximum . (0 :) <$> VPC
-  { column = Text.length . snd <$> st
-  , line = fst <$> st
+boundingBox st = VPC
+  { column = maximum $ 0 : [ Text.length l | l <- IntMap.elems st.stLines ]
+  , line = st.stLineCount
   }
 
 clampToBox :: SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
@@ -56,12 +89,31 @@ moveViewPort st VPC { column = dc, line = dl }
     c' = if dc == 0 then c else clamp (0, maxC) (c + dc)
 
 (!?) :: SourceText -> SDL.Point VPC Int -> Maybe Char
-ST st !? SDL.P vpc = lookup vpc.line st >>= safeIndex vpc.column
+st !? SDL.P vpc = IntMap.lookup vpc.line st.stLines >>= safeIndex vpc.column
   where
     safeIndex :: Int -> Text -> Maybe Char
     safeIndex i t
       | i < Text.length t = Just $ Text.index t i
       | otherwise = Nothing
+
+splitAt :: SDL.Point VPC Int -> SourceText -> (SourceText, SourceText)
+splitAt (SDL.P VPC { line, column }) st =
+  let (start, end) = Text.splitAt column (st ! line)
+   in ( ST
+        { stLines = IntMap.filterKeys (< line) st.stLines
+                 <> IntMap.fromList [ (line, start) | not (Text.null start) ]
+        , stLineCount = line + 1 `min` st.stLineCount
+        }
+      , ST
+        { stLines = IntMap.filterKeys (> line) st.stLines
+                 <> IntMap.fromList [ (line, end) | not (Text.null end) ]
+        , stLineCount = 0 `max` st.stLineCount - line
+        }
+      )
+
+insert :: SDL.Point VPC Int -> Text -> SourceText -> SourceText
+insert i text (splitAt i -> (before, after)) =
+  before <<>> sourceText text <<>> after
 
 data TextViewPort = TextViewPort
   { source    :: SourceText
@@ -113,7 +165,7 @@ blitTextViewPort surface fonts tvp = do
     charWidth <- advance fc 'o'
     pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
   bounds <- SDL.surfaceDimensions surface
-  for_ tvp.source.stLines \(i, line) -> do
+  for_ (IntMap.assocs tvp.source.stLines) \(i, line) -> do
     let blitY = toEnum $ (i - vec.line) * lineSkip
         blitPos = SDL.P $ SDL.V2 (-toEnum colSkip) blitY
         SDL.V2 _ maxY = bounds
