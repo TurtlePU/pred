@@ -23,8 +23,9 @@ import SDL qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
-import Pred.SourceText qualified as Source
+import Pred.BoundingBox qualified as BB
 import Pred.RichText qualified as Rich
+import Pred.SourceText qualified as Source
 import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit deriving (Bounded, Enum, Eq)
@@ -120,7 +121,8 @@ banana window fonts sdlHandler timerHandler = do
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
   scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $
     scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
-      Source.clampToBox source $ SDL.P $ Source.VPC (x + dx) (y - dy)
+      BB.clampToBox (Source.boundingBox source) $
+        SDL.P $ Source.VPC (x + dx) (y - dy)
   viewPort <- mfix \vport -> do
     clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)

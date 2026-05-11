@@ -45,6 +45,7 @@ library
     import:          stanzas
     hs-source-dirs:  src
     exposed-modules:
+        Pred.BoundingBox,
         Pred.RichText,
         Pred.SourceText,
         Pred.StableCache,

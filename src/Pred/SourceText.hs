@@ -4,7 +4,7 @@ module Pred.SourceText
   , (!)
   , (<<>>)
   , VPC (..)
-  , clampToBox
+  , boundingBox
   , moveViewPort
   , (!?)
   , splitAt
@@ -29,6 +29,9 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import SDL qualified
 
+import Pred.BoundingBox (BoundingBox)
+import Pred.BoundingBox qualified as BB
+
 data SourceText = ST
   { stLines :: IntMap Text
   , stLineCount :: Int
@@ -47,12 +50,12 @@ infixl 6 <<>>
 
 (<<>>) :: SourceText -> SourceText -> SourceText
 st <<>> st' = ST
-    { stLines = IntMap.unionWith (<>) st.stLines (modifier st'.stLines)
-    , stLineCount = st'.stLineCount + addend
-    }
-    where
-      addend = if st.stLineCount == 0 then 0 else st.stLineCount - 1
-      modifier = if addend == 0 then id else IntMap.mapKeys (+ addend)
+  { stLines = IntMap.unionWith (<>) st.stLines (modifier st'.stLines)
+  , stLineCount = st'.stLineCount + addend
+  }
+  where
+    addend = if st.stLineCount == 0 then 0 else st.stLineCount - 1
+    modifier = if addend == 0 then id else IntMap.mapKeys (+ addend)
 
 instance Semigroup SourceText where
   (<>) = (<<>>)
@@ -66,25 +69,24 @@ instance Monoid SourceText where
 data VPC a = VPC { column :: a, line :: a } deriving (Eq, Functor)
 
 instance Ord a => Ord (VPC a) where
-    VPC c l `compare` VPC c' l' = compare l l' <> compare c c'
+  VPC c l `compare` VPC c' l' = compare l l' <> compare c c'
 
-boundingBox :: SourceText -> VPC Int
-boundingBox st = VPC
+instance Applicative VPC where
+  pure x = VPC x x
+  VPC cf lf <*> VPC cx lx = VPC (cf cx) (lf lx)
+
+boundingBox :: SourceText -> BoundingBox VPC Int
+boundingBox st = BB.BB VPC
   { column = maximum $ 0 : [ Text.length l | l <- IntMap.elems st.stLines ]
   , line = st.stLineCount
   }
-
-clampToBox :: SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
-clampToBox (boundingBox -> VPC { column = maxC, line = maxL})
-    (SDL.P VPC { column = c, line = l }) =
-  SDL.P VPC { column = clamp (0, maxC) c, line = clamp (0, maxL) l }
 
 moveViewPort :: SourceText -> VPC Int -> SDL.Point VPC Int -> SDL.Point VPC Int
 moveViewPort st VPC { column = dc, line = dl }
     (SDL.P VPC { column = c, line = l }) =
   SDL.P VPC { column = c', line = l' }
   where
-    VPC { line = maxL } = boundingBox st
+    BB.BB VPC { line = maxL } = boundingBox st
     l' = if dl == 0 then l else clamp (0, maxL) (l + dl)
     maxC = Text.length (st ! l')
     c' = if dc == 0 then c else clamp (0, maxC) (c + dc)
@@ -123,7 +125,7 @@ insert i text (splitAt i -> (before, after)) =
 
 delete :: SDL.Point VPC Int -> VPC Int -> SourceText -> SourceText
 delete pos len st =
-    let pos' = moveViewPort st len pos
-        (p, q) = (min pos pos', max pos pos')
-     in let (splitAt p -> (st1, _), st3) = splitAt q st
-        in st1 <<>> st3
+  let pos' = moveViewPort st len pos
+      (p, q) = (min pos pos', max pos pos')
+   in let (splitAt p -> (st1, _), st3) = splitAt q st
+      in st1 <<>> st3
