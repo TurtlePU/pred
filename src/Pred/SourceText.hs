@@ -1,10 +1,12 @@
 module Pred.SourceText
   ( SourceText (stLines)
   , sourceText
+  , toText
   , (!)
   , (<<>>)
   , VPC (..)
   , boundingBox
+  , length
   , moveViewPort
   , (!?)
   , splitAt
@@ -20,7 +22,8 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
 import Data.Semigroup (Semigroup (..))
-import Prelude hiding (splitAt)
+import Data.String (fromString)
+import Prelude hiding (length, splitAt)
 
 import Data.IntMap (IntMap)
 import Data.IntMap qualified as IntMap
@@ -38,10 +41,16 @@ data SourceText = ST
   }
 
 sourceText :: Text -> SourceText
-sourceText (zip [0..] . Text.lines -> annot) = ST
+sourceText (zip [0..] . Text.splitOn (fromString "\n") -> annot) = ST
   { stLines = IntMap.fromList $ filter (not . Text.null . snd) annot
-  , stLineCount = maybe 0 (succ . fst . snd) (List.unsnoc annot)
+  , stLineCount = List.length annot
   }
+
+toText :: SourceText -> Text
+toText = Text.intercalate (fromString "\n") . IntMap.elems . \st ->
+  st.stLines <> IntMap.fromList (map (, Text.empty) [0 .. st.stLineCount - 1])
+
+infix 5 !
 
 (!) :: SourceText -> Int -> Text
 st ! i = fromMaybe Text.empty (st.stLines IntMap.!? i)
@@ -54,7 +63,7 @@ st <<>> st' = ST
   , stLineCount = st'.stLineCount + addend
   }
   where
-    addend = if st.stLineCount == 0 then 0 else st.stLineCount - 1
+    addend = st.stLineCount - 1
     modifier = if addend == 0 then id else IntMap.mapKeys (+ addend)
 
 instance Semigroup SourceText where
@@ -62,11 +71,19 @@ instance Semigroup SourceText where
   sconcat = foldl1' (<<>>)
 
 instance Monoid SourceText where
-  mempty = ST IntMap.empty 0
+  mempty = ST IntMap.empty 1
   mconcat = foldl' (<<>>) mempty
 
 -- | 'VPC' is short for "viewport coordinates".
 data VPC a = VPC { column :: a, line :: a } deriving (Eq, Functor)
+
+instance (Eq a, Num a) => Semigroup (VPC a) where
+  VPC c l <> VPC c' l'
+    | l' == 0 = VPC (c + c') l
+    | otherwise = VPC c' (l + l')
+
+instance (Eq a, Num a) => Monoid (VPC a) where
+  mempty = VPC 0 0
 
 instance Ord a => Ord (VPC a) where
   VPC c l `compare` VPC c' l' = compare l l' <> compare c c'
@@ -79,6 +96,12 @@ boundingBox :: SourceText -> BoundingBox VPC Int
 boundingBox st = BB.BB VPC
   { column = maximum $ 0 : [ Text.length l | l <- IntMap.elems st.stLines ]
   , line = st.stLineCount
+  }
+
+length :: SourceText -> VPC Int
+length st = VPC
+  { column = Text.length (st ! st.stLineCount - 1)
+  , line = st.stLineCount - 1
   }
 
 moveViewPort :: SourceText -> VPC Int -> SDL.Point VPC Int -> SDL.Point VPC Int
@@ -108,9 +131,10 @@ splitAt (SDL.P VPC { line, column }) st =
         , stLineCount = line + 1 `min` st.stLineCount
         }
       , ST
-        { stLines = IntMap.filterKeys (> line) st.stLines
+        { stLines = IntMap.mapKeys (subtract line)
+                 $ IntMap.filterKeys (> line) st.stLines
                  <> IntMap.fromList [ (line, end) | not (Text.null end) ]
-        , stLineCount = 0 `max` st.stLineCount - line
+        , stLineCount = 1 `max` st.stLineCount - line
         }
       )
 

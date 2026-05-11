@@ -13,6 +13,7 @@ import Data.Word (Word32)
 import System.Exit (exitSuccess)
 
 import Control.Monad.IO.Class (liftIO)
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Graphics.Text.Font.Choose qualified as FC
@@ -20,6 +21,7 @@ import Options.Applicative qualified as Opt
 import Reactive.Banana qualified as Banana
 import Reactive.Banana.Frameworks qualified as Banana
 import SDL qualified
+import SDL.Raw qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
@@ -30,7 +32,8 @@ import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit deriving (Bounded, Enum, Eq)
 
-data Action = Move (Source.VPC Int) | Enter Mode | ChangeFS Int | Exit
+data Action =
+  Move (Source.VPC Int) | Enter Mode | Input Text | ChangeFS Int | Exit
 
 main :: IO ()
 main = do
@@ -85,12 +88,15 @@ banana window fonts sdlHandler timerHandler = do
           SDL.MouseWheelEvent mwed ->
               Just (Right mwed.mouseWheelEventPos)
           _ -> Nothing
-      clicks = Banana.filterJust $ sdlE <&> \e ->
+      (clicks, inputs0) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
           SDL.MouseButtonEvent mbed
             | mbed.mouseButtonEventMotion == SDL.Pressed
               && mbed.mouseButtonEventWindow == Just window ->
-                Just (fromIntegral <$> mbed.mouseButtonEventPos)
+                Just $ Left (fromIntegral <$> mbed.mouseButtonEventPos)
+          SDL.TextInputEvent tied
+            | tied.textInputEventWindow == Just window ->
+              Just (Right tied.textInputEventText)
           _ -> Nothing
       actionMap =
         [ (Move (Source.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
@@ -99,37 +105,43 @@ banana window fonts sdlHandler timerHandler = do
         , (Move (Source.VPC 1 0), [minBound..maxBound], SDL.KeycodeRight)
         , (Enter Normal, [Edit], SDL.KeycodeEscape)
         , (Enter Edit, [Normal], SDL.KeycodeReturn)
+        , (Input (String.fromString "\n"), [Edit], SDL.KeycodeReturn)
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
         , (Exit, [Normal], SDL.KeycodeQ)
         ]
-      source = Source.sourceText text
-  (actions, modes) <- mfix \ ~(_, modes) -> do
+  (actions, modeSwitch, modes) <- mfix \ ~(_, _, modes) -> do
     actions' <- collect $
         (\md kc -> [ ac | (ac, ms, k) <- actionMap, k == kc, md `elem` ms ])
         <$> modes Banana.<@> press
-    modes' <- Banana.stepper Normal $ Banana.filterJust $ actions' <&> \case
-      Enter mode -> Just mode; _ -> Nothing
-    pure (actions', modes')
+    let modeSwitch' = Banana.filterJust $ actions' <&> \case
+          Enter mode -> Just mode; _ -> Nothing
+    modes' <- Banana.stepper Normal modeSwitch'
+    pure (actions', modeSwitch', modes')
   let (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
         Exit -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
-      moves = Banana.filterJust $ actions <&> \case
-        Move dm -> Just dm; _ -> Nothing
+      (moves, inputs1) = Banana.split $ Banana.filterJust $ actions <&> \case
+        Move dm -> Just (Left dm)
+        Input tx -> Just (Right tx)
+        _ -> Nothing
+      inputs = inputs0 <> inputs1
   fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
-  scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $
-    scroll <&> \(fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
-      BB.clampToBox (Source.boundingBox source) $
-        SDL.P $ Source.VPC (x + dx) (y - dy)
-  viewPort <- mfix \vport -> do
+  (sources, viewPort) <- mfix \ ~(sources, viewPort) -> do
+    scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $
+      (\source (fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
+        BB.clampToBox (Source.boundingBox source) $
+          SDL.P $ Source.VPC (x + dx) (y - dy)
+      ) <$> sources Banana.<@> scroll
     clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
-      ((,) <$> vport Banana.<@> clicks)
+      ((,) <$> viewPort Banana.<@> clicks)
     let cursorActions = Banana.unions
           [ const <$> clickPos
-          , Source.moveViewPort source <$> moves
+          , Source.moveViewPort <$> sources Banana.<@> moves
+          , (flip (<>) . SDL.P . Source.length . Source.sourceText) <$> inputs
           ]
     cursorPosB <- Banana.accumB (SDL.P $ Source.VPC 0 0) cursorActions
     drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
@@ -141,29 +153,45 @@ banana window fonts sdlHandler timerHandler = do
           pure case mode of
             Edit -> ([], [cursorPos | drawCursor])
             Normal -> ([cursorPos], [])
-    pure do
-      font <- fontB
-      position <- scrollPos
-      (selection, cursors) <- textManipulators
-      pure Rich.TextViewPort
-        { source = source
-        , font = font
-        , bgColor = SDL.V4 0 0 0 255
-        , textColor = SDL.V4 255 255 255 255
-        , position = position
-        , selection = selection
-        , cursors = cursors
-        }
+    sources' <- Banana.accumB (Source.sourceText text) $
+      Source.insert <$> cursorPosB Banana.<@> inputs
+    pure
+      ( sources'
+      , do
+        source <- sources
+        font <- fontB
+        position <- scrollPos
+        (selection, cursors) <- textManipulators
+        pure Rich.TextViewPort
+          { source = source
+          , font = font
+          , bgColor = SDL.V4 0 0 0 255
+          , textColor = SDL.V4 255 255 255 255
+          , position = position
+          , selection = selection
+          , cursors = cursors
+          }
+      )
   let renderer = viewPort <&> \tvp -> do
         windowSurface <- SDL.getWindowSurface window
         Rich.blitTextViewPort windowSurface fonts tvp
         SDL.updateWindowSurface window
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
+  Banana.reactimate (print <$> inputs)
+  SDL.stopTextInput
+  Banana.reactimate $ modeSwitch <&> \case
+    Edit -> do
+      SDL.V2 w h <- SDL.getWindowSurface window >>= SDL.surfaceDimensions
+      SDL.startTextInput (SDL.Raw.Rect 0 0 w h)
+    _ -> SDL.stopTextInput
   onceExit <- Banana.once exitKey
-  Banana.reactimate $ onceExit Banana.@> fontB <&> \f -> do
-    _ <- Toml.encodeToFile Toml.genericCodec configPath f
-    exitSuccess
+  Banana.reactimate $
+    (\source config -> do
+      Text.writeFile filePath (Source.toText source)
+      _ <- Toml.encodeToFile Toml.genericCodec configPath config
+      exitSuccess
+    ) <$> sources <*> fontB Banana.<@ onceExit
 
 collect :: Foldable f => Banana.Event (f a) -> Banana.MomentIO (Banana.Event a)
 collect events = do
