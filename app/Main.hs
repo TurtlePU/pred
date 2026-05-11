@@ -178,7 +178,6 @@ banana window fonts sdlHandler timerHandler = do
         SDL.updateWindowSurface window
   Banana.changes renderer >>= Banana.reactimate'
   Banana.valueB renderer >>= liftIO
-  Banana.reactimate (print <$> inputs)
   SDL.stopTextInput
   Banana.reactimate $ modeSwitch <&> \case
     Edit -> do
