@@ -32,8 +32,13 @@ import Pred.TTF qualified as TTF
 
 data Mode = Normal | Edit deriving (Bounded, Enum, Eq)
 
-data Action =
-  Move (Source.VPC Int) | Enter Mode | Input Text | ChangeFS Int | Exit
+data Action
+  = Move (Source.VPC Int)
+  | Enter Mode
+  | Input Text
+  | DeleteChar
+  | ChangeFS Int
+  | Exit
 
 main :: IO ()
 main = do
@@ -106,6 +111,7 @@ banana window fonts sdlHandler timerHandler = do
         , (Enter Normal, [Edit], SDL.KeycodeEscape)
         , (Enter Edit, [Normal], SDL.KeycodeReturn)
         , (Input (String.fromString "\n"), [Edit], SDL.KeycodeReturn)
+        , (DeleteChar, [Edit], SDL.KeycodeBackspace)
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
         , (Exit, [Normal], SDL.KeycodeQ)
@@ -126,6 +132,9 @@ banana window fonts sdlHandler timerHandler = do
         Move dm -> Just (Left dm)
         Input tx -> Just (Right tx)
         _ -> Nothing
+      deletes = Banana.filterJust $ actions <&> \case
+        DeleteChar -> Just ()
+        _ -> Nothing
       inputs = inputs0 <> inputs1
   fontB <- Banana.accumB initialFont $ resize <&>
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
@@ -142,6 +151,8 @@ banana window fonts sdlHandler timerHandler = do
           [ const <$> clickPos
           , Source.moveViewPort <$> sources Banana.<@> moves
           , (flip (<>) . SDL.P . Source.length . Source.sourceText) <$> inputs
+          , (\s -> Source.advance (-1) s . Source.clampToText s)
+              <$> sources Banana.<@ deletes
           ]
     cursorPosB <- Banana.accumB (SDL.P $ Source.VPC 0 0) cursorActions
     drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
@@ -153,8 +164,12 @@ banana window fonts sdlHandler timerHandler = do
           pure case mode of
             Edit -> ([], [cursorPos | drawCursor])
             Normal -> ([cursorPos], [])
-    sources' <- Banana.accumB (Source.sourceText text) $
-      Source.insert <$> cursorPosB Banana.<@> inputs
+    sources' <- Banana.accumB (Source.sourceText text) $ Banana.unions
+      [ Source.insert <$> cursorPosB Banana.<@> inputs
+      , flip (\s (Source.clampToText s -> p) ->
+          Source.delete (Source.advance (-1) s p, p) s)
+        <$> cursorPosB Banana.<@ deletes
+      ]
     pure
       ( sources'
       , do

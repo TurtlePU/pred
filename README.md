@@ -25,8 +25,7 @@ and you're good to go.
 
 - [x] modes
 - [x] cursor
-- [ ] basic editing
+- [x] basic editing
 - [x] lazy rendering
 - [ ] file watching with `fsnotify`
-- [ ] event multiplexing with channels
 - [ ] font picker

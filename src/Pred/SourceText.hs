@@ -8,6 +8,9 @@ module Pred.SourceText
   , boundingBox
   , length
   , moveViewPort
+  , clampToText
+  , normalize
+  , advance
   , (!?)
   , splitAt
   , splits
@@ -114,6 +117,31 @@ moveViewPort st VPC { column = dc, line = dl }
     maxC = Text.length (st ! l')
     c' = if dc == 0 then c else clamp (0, maxC) (c + dc)
 
+clampToText :: SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
+clampToText st (SDL.P VPC { column, line }) =
+  let line' = clamp (0, st.stLineCount - 1) line
+   in SDL.P VPC
+    { column = clamp (0, Text.length (st ! line')) column
+    , line = line'
+    }
+
+normalize :: SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
+normalize st p@(SDL.P VPC { column, line })
+  | line < 0 = SDL.P (VPC 0 0)
+  | column < 0 = normalize st $ SDL.P VPC
+    { column = column + Text.length (st ! line - 1) + 1
+    , line = line - 1
+    }
+  | line >= st.stLineCount = SDL.P (length st)
+  | column > Text.length (st ! line) = normalize st $ SDL.P VPC
+    { column = column - Text.length (st ! line) - 1
+    , line = line + 1
+    }
+  | otherwise = p
+
+advance :: Int -> SourceText -> SDL.Point VPC Int -> SDL.Point VPC Int
+advance n st p = normalize st (p <> SDL.P VPC { column = n, line = 0 })
+
 (!?) :: SourceText -> SDL.Point VPC Int -> Maybe Char
 st !? SDL.P vpc = IntMap.lookup vpc.line st.stLines >>= safeIndex vpc.column
   where
@@ -147,9 +175,8 @@ insert :: SDL.Point VPC Int -> Text -> SourceText -> SourceText
 insert i text (splitAt i -> (before, after)) =
   before <<>> sourceText text <<>> after
 
-delete :: SDL.Point VPC Int -> VPC Int -> SourceText -> SourceText
-delete pos len st =
-  let pos' = moveViewPort st len pos
-      (p, q) = (min pos pos', max pos pos')
+delete :: (SDL.Point VPC Int, SDL.Point VPC Int) -> SourceText -> SourceText
+delete (pos, pos') st =
+  let (p, q) = (min pos pos', max pos pos')
    in let (splitAt p -> (st1, _), st3) = splitAt q st
       in st1 <<>> st3
