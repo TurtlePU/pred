@@ -38,7 +38,6 @@ data Action
   | Input Text
   | DeleteChar
   | ChangeFS Int
-  | Exit
 
 sdlSetRawHint :: String -> String -> IO Bool
 sdlSetRawHint hint value = liftIO do
@@ -109,6 +108,9 @@ banana window fonts sdlHandler timerHandler = do
             | tied.textInputEventWindow == Just window ->
               Just (Right tied.textInputEventText)
           _ -> Nothing
+      exits = Banana.filterJust $ sdlE <&> \e -> case e.eventPayload of
+        SDL.QuitEvent -> Just ()
+        _ -> Nothing
       actionMap =
         [ (Move (Source.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
         , (Move (Source.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
@@ -120,7 +122,6 @@ banana window fonts sdlHandler timerHandler = do
         , (DeleteChar, [Edit], SDL.KeycodeBackspace)
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
-        , (Exit, [Normal], SDL.KeycodeQ)
         ]
   (actions, modeSwitch, modes) <- mfix \ ~(_, _, modes) -> do
     actions' <- collect $
@@ -130,16 +131,13 @@ banana window fonts sdlHandler timerHandler = do
           Enter mode -> Just mode; _ -> Nothing
     modes' <- Banana.stepper Normal modeSwitch'
     pure (actions', modeSwitch', modes')
-  let (exitKey, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
-        Exit -> Just (Left ())
+  let (deletes, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
+        DeleteChar -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
       (moves, inputs1) = Banana.split $ Banana.filterJust $ actions <&> \case
         Move dm -> Just (Left dm)
         Input tx -> Just (Right tx)
-        _ -> Nothing
-      deletes = Banana.filterJust $ actions <&> \case
-        DeleteChar -> Just ()
         _ -> Nothing
       inputs = inputs0 <> inputs1
   fontB <- Banana.accumB initialFont $ resize <&>
@@ -205,7 +203,7 @@ banana window fonts sdlHandler timerHandler = do
       SDL.V2 w h <- SDL.getWindowSurface window >>= SDL.surfaceDimensions
       SDL.startTextInput (SDL.Raw.Rect 0 0 w h)
     _ -> SDL.stopTextInput
-  onceExit <- Banana.once exitKey
+  onceExit <- Banana.once exits
   Banana.reactimate $
     (\source config -> do
       Text.writeFile filePath (Source.toText source)
