@@ -25,7 +25,6 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
 import Data.Semigroup (Semigroup (..))
-import Data.String (fromString)
 import Prelude hiding (length, splitAt)
 
 import Data.IntMap (IntMap)
@@ -44,13 +43,13 @@ data SourceText = ST
   }
 
 sourceText :: Text -> SourceText
-sourceText (zip [0..] . Text.splitOn (fromString "\n") -> annot) = ST
+sourceText (zip [0..] . Text.splitOn "\n" -> annot) = ST
   { stLines = IntMap.fromList $ filter (not . Text.null . snd) annot
   , stLineCount = List.length annot
   }
 
 toText :: SourceText -> Text
-toText = Text.intercalate (fromString "\n") . IntMap.elems . \st ->
+toText = Text.intercalate "\n" . IntMap.elems . \st ->
   st.stLines <> IntMap.fromList (map (, Text.empty) [0 .. st.stLineCount - 1])
 
 infix 5 !
