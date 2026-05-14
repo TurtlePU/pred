@@ -13,7 +13,6 @@ import Data.Word (Word32)
 import Foreign.C.String (withCString)
 import System.Exit (exitSuccess)
 
-import Control.Monad.Cont (ContT (ContT), evalContT)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -23,7 +22,6 @@ import Reactive.Banana qualified as Banana
 import Reactive.Banana.Frameworks qualified as Banana
 import SDL qualified
 import SDL.Raw qualified
-import SDL.Raw.Basic qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
@@ -42,24 +40,24 @@ data Action
   | ChangeFS Int
   | Exit
 
-sdlSetHint :: MonadIO m => String -> String -> m Bool
-sdlSetHint hint value = liftIO do
+sdlSetRawHint :: String -> String -> IO Bool
+sdlSetRawHint hint value = liftIO do
   withCString hint \chint ->
     withCString value \cvalue ->
-      SDL.Raw.Basic.setHint chint cvalue
+      SDL.Raw.setHint chint cvalue
 
 main :: IO ()
-main = evalContT do
-  sdlSetHint "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR" "0"
+main = do
+  sdlSetRawHint "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR" "0"
   SDL.initializeAll
   let newWindow = SDL.createWindow "PrEd proof editor" SDL.defaultWindow
         { SDL.windowHighDPI = True
         , SDL.windowMode = SDL.Maximized
         , SDL.windowResizable = True
         }
-  window <- ContT (newWindow `bracket` SDL.destroyWindow)
-  fonts <- ContT (TTF.newFonts `bracket` TTF.closeFonts)
-  liftIO do
+      withWindow = newWindow `bracket` SDL.destroyWindow
+      withFonts = TTF.newFonts `bracket` TTF.closeFonts
+  withWindow \window -> withFonts \fonts -> do
     (sdlHandler, fireSDL) <- Banana.newAddHandler
     (timerHandler, fireTimer) <- Banana.newAddHandler
     Banana.compile (banana window fonts sdlHandler timerHandler)

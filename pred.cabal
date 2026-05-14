@@ -35,7 +35,6 @@ executable pred
         base,
         directory,
         fontconfig-pure >= 0.5,
-        mtl,
         optparse-applicative,
         pred,
         reactive-banana,
