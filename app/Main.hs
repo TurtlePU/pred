@@ -23,6 +23,7 @@ import Reactive.Banana qualified as Banana
 import Reactive.Banana.Frameworks qualified as Banana
 import SDL qualified
 import SDL.Raw qualified
+import SDL.Raw.Basic qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
@@ -41,11 +42,15 @@ data Action
   | ChangeFS Int
   | Exit
 
+sdlSetHint :: MonadIO m => String -> String -> m Bool
+sdlSetHint hint value = liftIO do
+  withCString hint \chint ->
+    withCString value \cvalue ->
+      SDL.Raw.Basic.setHint chint cvalue
+
 main :: IO ()
 main = evalContT do
-  bypassHint <- ContT (withCString "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR")
-  zeroStr <- ContT (withCString "0")
-  SDL.Raw.setHint bypassHint zeroStr
+  sdlSetHint "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR" "0"
   SDL.initializeAll
   let newWindow = SDL.createWindow "PrEd proof editor" SDL.defaultWindow
         { SDL.windowHighDPI = True
