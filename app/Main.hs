@@ -6,14 +6,14 @@ import Control.Applicative ((<**>))
 import Control.Exception (bracket)
 import Control.Monad (forever)
 import Control.Monad.Fix (mfix)
+import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (traverse_)
-import Data.String qualified as String
 import Data.Functor ((<&>))
 import Data.Word (Word32)
-import Foreign.C.String
+import Foreign.C.String (withCString)
 import System.Exit (exitSuccess)
 
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Cont (ContT (ContT), evalContT)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -42,25 +42,24 @@ data Action
   | ChangeFS Int
   | Exit
 
-sdlSetHint :: String -> String -> IO Bool
-sdlSetHint hint value = do
+sdlSetHint :: MonadIO m => String -> String -> m Bool
+sdlSetHint hint value = liftIO do
   withCString hint \chint ->
     withCString value \cvalue ->
       SDL.Raw.Basic.setHint chint cvalue
 
 main :: IO ()
-main = do
+main = evalContT do
   sdlSetHint "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR" "0"
   SDL.initializeAll
-  let newWindow = SDL.createWindow (String.fromString "PrEd proof editor")
-        SDL.defaultWindow
-          { SDL.windowHighDPI = True
-          , SDL.windowMode = SDL.Maximized
-          , SDL.windowResizable = True
-          }
-      withWindow = newWindow `bracket` SDL.destroyWindow
-      withFonts = TTF.newFonts `bracket` TTF.closeFonts
-  withWindow \window -> withFonts \fonts -> do
+  let newWindow = SDL.createWindow "PrEd proof editor" SDL.defaultWindow
+        { SDL.windowHighDPI = True
+        , SDL.windowMode = SDL.Maximized
+        , SDL.windowResizable = True
+        }
+  window <- ContT (newWindow `bracket` SDL.destroyWindow)
+  fonts <- ContT (TTF.newFonts `bracket` TTF.closeFonts)
+  liftIO do
     (sdlHandler, fireSDL) <- Banana.newAddHandler
     (timerHandler, fireTimer) <- Banana.newAddHandler
     Banana.compile (banana window fonts sdlHandler timerHandler)
@@ -90,7 +89,7 @@ banana window fonts sdlHandler timerHandler = do
       pattern <- maybe (error "lol no Fira Code") pure $
         FC.fontMatch fc (FC.nameParse "Fira Code")
       path <- maybe (error "lol no filepath") (pure . Text.pack) $
-        FC.getValue (String.fromString "file") pattern
+        FC.getValue "file" pattern
       pure TTF.MkFont { pointSize = 36, path = path }
   sdlE <- Banana.fromAddHandler sdlHandler
   time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
@@ -119,7 +118,7 @@ banana window fonts sdlHandler timerHandler = do
         , (Move (Source.VPC 1 0), [minBound..maxBound], SDL.KeycodeRight)
         , (Enter Normal, [Edit], SDL.KeycodeEscape)
         , (Enter Edit, [Normal], SDL.KeycodeReturn)
-        , (Input (String.fromString "\n"), [Edit], SDL.KeycodeReturn)
+        , (Input "\n", [Edit], SDL.KeycodeReturn)
         , (DeleteChar, [Edit], SDL.KeycodeBackspace)
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
