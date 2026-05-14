@@ -10,6 +10,7 @@ import Data.Foldable (traverse_)
 import Data.String qualified as String
 import Data.Functor ((<&>))
 import Data.Word (Word32)
+import Foreign.C.String
 import System.Exit (exitSuccess)
 
 import Control.Monad.IO.Class (liftIO)
@@ -22,6 +23,7 @@ import Reactive.Banana qualified as Banana
 import Reactive.Banana.Frameworks qualified as Banana
 import SDL qualified
 import SDL.Raw qualified
+import SDL.Raw.Basic qualified
 import System.Directory qualified as Dir
 import Toml qualified
 
@@ -40,8 +42,15 @@ data Action
   | ChangeFS Int
   | Exit
 
+sdlSetHint :: String -> String -> IO Bool
+sdlSetHint hint value = do
+  withCString hint \chint ->
+    withCString value \cvalue ->
+      SDL.Raw.Basic.setHint chint cvalue
+
 main :: IO ()
 main = do
+  sdlSetHint "SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR" "0"
   SDL.initializeAll
   let newWindow = SDL.createWindow (String.fromString "PrEd proof editor")
         SDL.defaultWindow
