@@ -108,9 +108,13 @@ banana window fonts sdlHandler timerHandler = do
             | tied.textInputEventWindow == Just window ->
               Just (Right tied.textInputEventText)
           _ -> Nothing
-      exits = Banana.filterJust $ sdlE <&> \e -> case e.eventPayload of
-        SDL.QuitEvent -> Just ()
-        _ -> Nothing
+      (sizeChanges, exits) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
+        case e.eventPayload of
+          SDL.WindowSizeChangedEvent wsced
+            | wsced.windowSizeChangedEventWindow == window ->
+                Just (Left wsced.windowSizeChangedEventSize)
+          SDL.QuitEvent -> Just $ Right ()
+          _ -> Nothing
       actionMap =
         [ (Move (Source.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
         , (Move (Source.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
@@ -131,7 +135,7 @@ banana window fonts sdlHandler timerHandler = do
           Enter mode -> Just mode; _ -> Nothing
     modes' <- Banana.stepper Normal modeSwitch'
     pure (actions', modeSwitch', modes')
-  let (deletes, resize) = Banana.split $ Banana.filterJust $ actions <&> \case
+  let (deletes, changeFS) = Banana.split $ Banana.filterJust $ actions <&> \case
         DeleteChar -> Just (Left ())
         ChangeFS ds -> Just (Right ds)
         _ -> Nothing
@@ -140,27 +144,44 @@ banana window fonts sdlHandler timerHandler = do
         Input tx -> Just (Right tx)
         _ -> Nothing
       inputs = inputs0 <> inputs1
-  fontB <- Banana.accumB initialFont $ resize <&>
+  fontE <- Banana.accumE initialFont $ changeFS <&>
     \ds font -> font { TTF.pointSize = font.pointSize + ds }
+  fontB <- Banana.stepper initialFont fontE
   (sources, viewPort) <- mfix \ ~(sources, viewPort) -> do
-    scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $
-      (\source (fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
-        BB.clampToBox (Source.boundingBox source) $
-          SDL.P $ Source.VPC (x + dx) (y - dy)
-      ) <$> sources Banana.<@> scroll
     clickPos <- Banana.mapEventIO
       (\(vp, pos) -> Rich.pxToViewPort vp fonts pos)
       ((,) <$> viewPort Banana.<@> clicks)
-    let cursorActions = Banana.unions
-          [ const <$> clickPos
-          , Source.moveViewPort <$> sources Banana.<@> moves
-          , (flip (<>) . SDL.P . Source.length . Source.sourceText) <$> inputs
-          , (\s -> Source.advance (-1) s . Source.clampToText s)
-              <$> sources Banana.<@ deletes
-          ]
-    cursorPosB <- Banana.accumB (SDL.P $ Source.VPC 0 0) cursorActions
+    let cursorPos0 = SDL.P (Source.VPC 0 0)
+    cursorPosE <- Banana.accumE cursorPos0 $ Banana.unions
+      [ const <$> clickPos
+      , Source.moveViewPort <$> sources Banana.<@> moves
+      , (flip (<>) . SDL.P . Source.length . Source.sourceText) <$> inputs
+      , (\s -> Source.advance (-1) s . Source.clampToText s)
+          <$> sources Banana.<@ deletes
+      ]
+    cursorPosB <- Banana.stepper cursorPos0 cursorPosE
     drawCursorB <- liftA2 (\t lat -> (t - lat) `mod` 1000 < 500) time
-      <$> Banana.stepper 0 (cursorActions Banana.@> time)
+      <$> Banana.stepper 0 (cursorPosE Banana.@> time)
+    let charPx font = do
+          fc <- TTF.load fonts font
+          SDL.V2 <$> TTF.someColSkip fc <*> TTF.lineSkip fc
+    charPx0 <- liftIO (charPx initialFont)
+    charPxB <- Banana.mapEventIO charPx fontE >>= Banana.stepper charPx0
+    initialSize <-
+      fmap fromIntegral <$> liftIO (SDL.get $ SDL.windowSize window)
+    windowSizeB <- Banana.stepper initialSize sizeChanges
+    let dimensions =
+            (\(SDL.V2 dx dy) (SDL.V2 wx wy) ->
+                Source.VPC (fromEnum wx `div` dx) (fromEnum wy `div` dy))
+            <$> charPxB <*> windowSizeB
+    scrollPos <- Banana.accumB (SDL.P $ Source.VPC 0 0) $ Banana.unions
+      [ (\dim (SDL.P cpos) spos -> BB.clampToBox (BB.BB (cpos - dim) cpos) spos)
+          <$> dimensions Banana.<@> cursorPosE
+      , (\source (fmap fromEnum -> SDL.V2 dx dy) (SDL.P (Source.VPC x y)) ->
+          BB.clampToBox (Source.boundingBox source) $
+            SDL.P $ Source.VPC (x + dx) (y - dy)
+        ) <$> sources Banana.<@> scroll
+      ]
     let textManipulators = do
           mode <- modes
           cursorPos <- cursorPosB

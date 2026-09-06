@@ -5,7 +5,7 @@ module Pred.RichText
   ) where
 
 import Control.Monad (when)
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.IO.Class (MonadIO)
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
 import Foreign.C (CInt)
@@ -65,14 +65,14 @@ blitTextViewPort surface fonts tvp = do
     let pos = fromIntegral vec.column
         start = Text.take pos (tvp.source ST.! vec.line)
     (trueWidth, _) <- TTF.size fc start
-    charWidth <- advance fc 'o'
+    charWidth <- TTF.someColSkip fc
     pure $ trueWidth + charWidth * max 0 (pos - Text.length start)
   bounds <- SDL.surfaceDimensions surface
   for_ (IntMap.assocs tvp.source.stLines) \(i, line) -> do
     let blitY = toEnum $ (i - vec.line) * lineSkip
         blitPos = SDL.P $ SDL.V2 (-toEnum colSkip) blitY
         SDL.V2 _ maxY = bounds
-    when (0 <= blitY && blitY + toEnum lineSkip < maxY) do
+    when (0 <= blitY && blitY < maxY) do
       lineSurface <- TTF.solid fc tvp.textColor line
       _ <- SDL.surfaceBlit lineSurface Nothing surface (Just blitPos)
       pure ()
@@ -80,7 +80,7 @@ blitTextViewPort surface fonts tvp = do
     cPX <- viewPortToPx fc selectionPos
     when (cPX `inBounds` bounds) do
       let char = fromMaybe ' ' (tvp.source ST.!? selectionPos)
-      charWidth <- advance fc char
+      charWidth <- TTF.advance fc char
       let rect = SDL.Rectangle cPX (toEnum <$> SDL.V2 charWidth lineSkip)
       SDL.surfaceFillRect surface (Just rect) tvp.textColor
       charSurface <- TTF.solid fc tvp.bgColor (Text.singleton char)
@@ -90,16 +90,11 @@ blitTextViewPort surface fonts tvp = do
     cPX <- viewPortToPx fc cursorPos
     when (cPX `inBounds` bounds) do
       let char = fromMaybe ' ' (tvp.source ST.!? cursorPos)
-      charWidth <- advance fc char
+      charWidth <- TTF.advance fc char
       let rect = SDL.Rectangle cPX
             (toEnum <$> SDL.V2 (charWidth `div` 5) lineSkip)
       SDL.surfaceFillRect surface (Just rect) tvp.textColor
   where
-    advance :: MonadIO m => TTF.FontCache -> Char -> m Int
-    advance fc char = liftIO do
-      Just (_, _, _, _, adv) <- TTF.glyphMetrics fc char
-      pure adv
-
     inBounds ::
       (Applicative f, Foldable f, Num a, Ord a) => SDL.Point f a -> f a -> Bool
     inBounds (SDL.P v) b = all (uncurry inBound) $ liftA2 (,) v b

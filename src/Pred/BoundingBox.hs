@@ -4,10 +4,9 @@ import Data.Ord (clamp)
 
 import SDL qualified
 
-newtype BoundingBox f a = BB { boundingBox :: f a }
+data BoundingBox f a = BB { bbStart :: f a, bbEnd :: f a }
 
 clampToBox ::
-  (Applicative f, Num a, Ord a) =>
+  (Applicative f, Ord a) =>
   BoundingBox f a -> SDL.Point f a -> SDL.Point f a
-clampToBox (BB bb) (SDL.P xx) = SDL.P (clamper <$> bb <*> xx)
-  where clamper b x = clamp (0, b) x
+clampToBox (BB st en) (SDL.P xx) = SDL.P (curry clamp <$> st <*> en <*> xx)

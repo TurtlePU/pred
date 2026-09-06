@@ -6,6 +6,8 @@ module Pred.TTF
   , load
   , FontCache
   , glyphMetrics
+  , advance
+  , someColSkip
   , lineSkip
   , size
   , Color
@@ -57,6 +59,12 @@ closeFontCache fc = closeCache fc.surfaces >> TTF.free fc.font
 glyphMetrics ::
   MonadIO m => FontCache -> Char -> m (Maybe (Int, Int, Int, Int, Int))
 glyphMetrics = TTF.glyphMetrics . (.font)
+
+advance :: MonadIO m => FontCache -> Char -> m Int
+advance fc char = maybe 0 (\(_, _, _, _, adv) -> adv) <$> glyphMetrics fc char
+
+someColSkip :: MonadIO m => FontCache -> m Int
+someColSkip = (`advance` 'o')
 
 lineSkip :: MonadIO m => FontCache -> m Int
 lineSkip = TTF.lineSkip . (.font)

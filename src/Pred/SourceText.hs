@@ -79,6 +79,15 @@ instance Monoid SourceText where
 -- | 'VPC' is short for "viewport coordinates".
 data VPC a = VPC { column :: a, line :: a } deriving (Eq, Functor)
 
+instance Num a => Num (VPC a) where
+  (+) = liftA2 (+)
+  (-) = liftA2 (-)
+  (*) = liftA2 (*)
+  abs = fmap abs
+  signum = fmap signum
+  negate = fmap negate
+  fromInteger = pure . fromInteger
+
 instance (Eq a, Num a) => Semigroup (VPC a) where
   VPC c l <> VPC c' l'
     | l' == 0 = VPC (c + c') l
@@ -95,9 +104,12 @@ instance Applicative VPC where
   VPC cf lf <*> VPC cx lx = VPC (cf cx) (lf lx)
 
 boundingBox :: SourceText -> BoundingBox VPC Int
-boundingBox st = BB.BB VPC
-  { column = maximum $ 0 : [ Text.length l | l <- IntMap.elems st.stLines ]
-  , line = st.stLineCount
+boundingBox st = BB.BB
+  { bbStart = VPC 0 0
+  , bbEnd = VPC
+    { column = maximum $ 0 : [ Text.length l | l <- IntMap.elems st.stLines ]
+    , line = st.stLineCount
+    }
   }
 
 length :: SourceText -> VPC Int
@@ -111,7 +123,7 @@ moveViewPort st VPC { column = dc, line = dl }
     (SDL.P VPC { column = c, line = l }) =
   SDL.P VPC { column = c', line = l' }
   where
-    BB.BB VPC { line = maxL } = boundingBox st
+    BB.BB { bbEnd = VPC { line = maxL } } = boundingBox st
     l' = if dl == 0 then l else clamp (0, maxL) (l + dl)
     maxC = Text.length (st ! l')
     c' = if dc == 0 then c else clamp (0, maxC) (c + dc)

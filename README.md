@@ -27,8 +27,8 @@ and you're good to go.
 - [x] cursor
 - [x] basic editing
 - [x] lazy rendering
-- [ ] follow cursor
-- [ ] handle window resizing
+- [x] follow cursor
+- [x] handle window resizing
 - [ ] file watching with `fsnotify`
 - [ ] font picker
 - [ ] handle `DropEventData`
