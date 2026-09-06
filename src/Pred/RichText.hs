@@ -39,9 +39,8 @@ pxToViewPort tvp fonts (SDL.P (SDL.V2 x y)) = do
       line = pos.line + y `div` lineSkip
       lineText = tvp.source ST.! line
   column <- binarySearch (-1, Text.length lineText) \i -> do
-    (wl, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (max 0 i) lineText
-    (wr, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (i + 1) lineText
-    pure $ (wl + wr) `div` 2 > x
+    (w, _) <- TTF.size fc $ Text.drop pos.column $ Text.take (i + 1) lineText
+    pure (w > x)
   pure $ SDL.P ST.VPC { column = column, line = line }
   where
     binarySearch :: (Integral a, Monad m) => (a, a) -> (a -> m Bool) -> m a
@@ -73,7 +72,7 @@ blitTextViewPort surface fonts tvp = do
     let blitY = toEnum $ (i - vec.line) * lineSkip
         blitPos = SDL.P $ SDL.V2 (-toEnum colSkip) blitY
         SDL.V2 _ maxY = bounds
-    when (0 <= blitY && blitY < maxY) do
+    when (0 <= blitY && blitY + toEnum lineSkip < maxY) do
       lineSurface <- TTF.solid fc tvp.textColor line
       _ <- SDL.surfaceBlit lineSurface Nothing surface (Just blitPos)
       pure ()
