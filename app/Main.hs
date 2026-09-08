@@ -93,9 +93,11 @@ banana window fonts sdlHandler timerHandler = do
   let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
         case e.eventPayload of
           SDL.KeyboardEvent ked
-            | ked.keyboardEventKeyMotion == SDL.Pressed ->
-              Just (Left ked.keyboardEventKeysym.keysymKeycode)
-          SDL.MouseWheelEvent mwed ->
+            | ked.keyboardEventWindow == Just window
+              && ked.keyboardEventKeyMotion == SDL.Pressed ->
+                Just (Left ked.keyboardEventKeysym.keysymKeycode)
+          SDL.MouseWheelEvent mwed
+            | mwed.mouseWheelEventWindow == Just window ->
               Just (Right mwed.mouseWheelEventPos)
           _ -> Nothing
       (clicks, inputs0) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
