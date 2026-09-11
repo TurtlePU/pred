@@ -10,7 +10,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (traverse_)
 import Data.Functor ((<&>))
 import Data.Word (Word32)
-import Foreign.C.String (withCString)
+import Foreign.C.String (peekCString, withCString)
 import System.Exit (exitSuccess)
 
 import Data.Text (Text)
@@ -69,15 +69,12 @@ banana ::
   SDL.Window -> TTF.Fonts ->
   Banana.AddHandler SDL.Event -> Banana.AddHandler Word32 -> Banana.MomentIO ()
 banana window fonts sdlHandler timerHandler = do
-  filePath <- liftIO $ Opt.execParser $ Opt.info
+  filePath0 <- liftIO $ Opt.execParser $ Opt.info
     (Opt.strArgument
       (Opt.metavar "FILE" <> Opt.help "File to edit" <> Opt.action "file")
         <**> Opt.helper)
     (Opt.fullDesc <> Opt.progDesc ("PrEd is a Proof Editor, "
       <> "an IDE specifically tailored for interactive proof assistants."))
-  text <- liftIO $ Dir.doesFileExist filePath >>= \case
-    True -> Text.readFile filePath
-    False -> pure Text.empty
   configPath <- liftIO $ Dir.getXdgDirectory Dir.XdgConfig "predconfig.toml"
   initialFont <- liftIO $ Dir.doesFileExist configPath >>= \case
     True -> Toml.decodeFile Toml.genericCodec configPath
@@ -90,33 +87,36 @@ banana window fonts sdlHandler timerHandler = do
       pure TTF.MkFont { pointSize = 36, path = path }
   sdlE <- Banana.fromAddHandler sdlHandler
   time <- Banana.fromAddHandler timerHandler >>= Banana.stepper 0
-  let (press, scroll) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
-        case e.eventPayload of
-          SDL.KeyboardEvent ked
-            | ked.keyboardEventWindow == Just window
-              && ked.keyboardEventKeyMotion == SDL.Pressed ->
-                Just (Left ked.keyboardEventKeysym.keysymKeycode)
-          SDL.MouseWheelEvent mwed
-            | mwed.mouseWheelEventWindow == Just window ->
-              Just (Right mwed.mouseWheelEventPos)
-          _ -> Nothing
-      (clicks, inputs0) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
-        case e.eventPayload of
-          SDL.MouseButtonEvent mbed
-            | mbed.mouseButtonEventMotion == SDL.Pressed
-              && mbed.mouseButtonEventWindow == Just window ->
-                Just $ Left (fromIntegral <$> mbed.mouseButtonEventPos)
-          SDL.TextInputEvent tied
-            | tied.textInputEventWindow == Just window ->
-              Just (Right tied.textInputEventText)
-          _ -> Nothing
-      (sizeChanges, exits) = Banana.split $ Banana.filterJust $ sdlE <&> \e ->
-        case e.eventPayload of
-          SDL.WindowSizeChangedEvent wsced
-            | wsced.windowSizeChangedEventWindow == window ->
-                Just (Left wsced.windowSizeChangedEventSize)
-          SDL.QuitEvent -> Just $ Right ()
-          _ -> Nothing
+  let fromSDL :: (SDL.EventPayload -> Maybe a) -> Banana.Event a
+      fromSDL f = Banana.filterJust $ sdlE <&> \e -> f e.eventPayload
+      press = fromSDL \case
+        SDL.KeyboardEvent ked
+          | ked.keyboardEventWindow == Just window
+            && ked.keyboardEventKeyMotion == SDL.Pressed ->
+              Just ked.keyboardEventKeysym.keysymKeycode
+        _ -> Nothing
+      scroll = fromSDL \case
+        SDL.MouseWheelEvent mwed
+          | mwed.mouseWheelEventWindow == Just window ->
+            Just mwed.mouseWheelEventPos
+        _ -> Nothing
+      clicks = fromSDL \case
+        SDL.MouseButtonEvent mbed
+          | mbed.mouseButtonEventMotion == SDL.Pressed
+            && mbed.mouseButtonEventWindow == Just window ->
+              Just (fromIntegral <$> mbed.mouseButtonEventPos)
+        _ -> Nothing
+      inputs0 = fromSDL \case
+        SDL.TextInputEvent tied
+          | tied.textInputEventWindow == Just window ->
+            Just tied.textInputEventText
+        _ -> Nothing
+      sizeChanges = fromSDL \case
+        SDL.WindowSizeChangedEvent wsced
+          | wsced.windowSizeChangedEventWindow == window ->
+            Just wsced.windowSizeChangedEventSize
+        _ -> Nothing
+      exits = fromSDL \case { SDL.QuitEvent -> Just (); _ -> Nothing }
       actionMap =
         [ (Move (Source.VPC (-1) 0), [minBound..maxBound], SDL.KeycodeLeft)
         , (Move (Source.VPC 0 (-1)), [minBound..maxBound], SDL.KeycodeUp)
@@ -129,6 +129,8 @@ banana window fonts sdlHandler timerHandler = do
         , (ChangeFS (-1), [Normal], SDL.KeycodeMinus)
         , (ChangeFS 1, [Normal], SDL.KeycodeEquals)
         ]
+  dropFiles <- Banana.mapEventIO peekCString $ fromSDL \case
+    { SDL.DropEvent ded -> Just ded.dropEventFile; _ -> Nothing }
   (actions, modeSwitch, modes) <- mfix \ ~(_, _, modes) -> do
     actions' <- collect $
         (\md kc -> [ ac | (ac, ms, k) <- actionMap, k == kc, md `elem` ms ])
@@ -189,10 +191,17 @@ banana window fonts sdlHandler timerHandler = do
           cursorPos <- cursorPosB
           drawCursor <- drawCursorB
           pure case mode of
-            Edit -> ([], [cursorPos | drawCursor])
+            Edit   -> ([], [cursorPos | drawCursor])
             Normal -> ([cursorPos], [])
-    sources' <- Banana.accumB (Source.sourceText text) $ Banana.unions
-      [ Source.insert <$> cursorPosB Banana.<@> inputs
+        readSource filePath = do
+          fileExists <- Dir.doesFileExist filePath
+          if fileExists then Source.sourceText <$> Text.readFile filePath
+          else pure mempty
+    source0 <- liftIO (readSource filePath0)
+    sourceDrops <- Banana.mapEventIO readSource dropFiles
+    sources' <- Banana.accumB source0 $ Banana.unions
+      [ const <$> sourceDrops
+      , Source.insert <$> cursorPosB Banana.<@> inputs
       , flip (\s (Source.clampToText s -> p) ->
           Source.delete (Source.advance (-1) s p, p) s)
         <$> cursorPosB Banana.<@ deletes
@@ -227,12 +236,13 @@ banana window fonts sdlHandler timerHandler = do
       SDL.startTextInput (SDL.Raw.Rect 0 0 w h)
     _ -> SDL.stopTextInput
   onceExit <- Banana.once exits
+  filePaths <- Banana.stepper filePath0 dropFiles
   Banana.reactimate $
-    (\source config -> do
+    (\filePath source config -> do
       Text.writeFile filePath (Source.toText source)
       _ <- Toml.encodeToFile Toml.genericCodec configPath config
       exitSuccess
-    ) <$> sources <*> fontB Banana.<@ onceExit
+    ) <$> filePaths <*> sources <*> fontB Banana.<@ onceExit
 
 collect :: Foldable f => Banana.Event (f a) -> Banana.MomentIO (Banana.Event a)
 collect events = do

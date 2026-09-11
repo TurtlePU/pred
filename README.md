@@ -29,6 +29,8 @@ and you're good to go.
 - [x] lazy rendering
 - [x] follow cursor
 - [x] handle window resizing
-- [ ] file watching with `fsnotify`
+- [x] handle `DropEventData`
+- [ ] "save" action, prompt on exit
 - [ ] font picker
-- [ ] handle `DropEventData`
+- [ ] conflict resolution view
+- [ ] file watching with `fsnotify`
